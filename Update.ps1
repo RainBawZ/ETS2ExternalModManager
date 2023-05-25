@@ -19,7 +19,7 @@ Function Sync-Ets2ModRepo {
 
     Function Get-ModRepoFile {
         [CmdletBinding()]
-        Param ([Parameter(Mandatory)][String]$File, [Int]$XPos, [String]$State, [Switch]$UseIWR, [Switch]$Save)
+        Param ([Parameter(Mandatory)][String]$File, [Byte]$XPos, [String]$State, [Switch]$UseIWR, [Switch]$Save)
 
         [Uri]$Uri = "http://your.online/ets2repo/$($File)"
 
