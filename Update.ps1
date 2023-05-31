@@ -1,4 +1,4 @@
-#version=2.8.4
+#version=2.8.5
 Param ([String]$Updated)
 Function Sync-Ets2ModRepo {
     Param ([Switch]$Updated)
@@ -8,22 +8,60 @@ Function Sync-Ets2ModRepo {
         Param (
             [Parameter(Mandatory, Position = 1, ValueFromRemainingArguments)][Object]$Object,
             [Parameter(Mandatory, Position = 0)][ValidateScript({$_ -In (0..$Host.UI.RawUI.BufferSize.Width)})][Byte]$X,
-            [Switch]$NoNewline, [ConsoleColor]$ForegroundColor
+            [ConsoleColor]$Color,
+            [Switch]$Newline
         )
         [Hashtable]$WHSplat = @{Object = $Object}
-        If ($NoNewline)       {$WHSplat['NoNewline']       = $True}
-        If ($ForegroundColor) {$WHSplat['ForegroundColor'] = $ForegroundColor}
+        If (!$Newline) {$WHSplat['NoNewline']       = $True}
+        If ($Color)    {$WHSplat['ForegroundColor'] = $Color}
         [Console]::SetCursorPosition($X, $Host.UI.RawUI.CursorPosition.Y)
         Write-Host @WHSplat
     }
 
+    Function Get-ModPriority {
+        Param([Parameter(Mandatory)][String]$Mod)
+        [Hashtable]$Priorities = @{
+            ai_traffic_pack             = 38 + 1
+            better_road_events          = 39 + 1
+            brutal_traffic              = 19 + 1
+            bus_traffic_pack            = 37 + 1
+            classic_cars_traffic_pack_a = 29 + 1
+            classic_cars_traffic_pack_b = 28 + 1
+            military_cargo_pack_a       = 22 + 1
+            military_cargo_pack_b       = 21 + 1
+            military_cargo_pack_c       = 20 + 1
+            motorcycle_traffic_pack_a   = 27 + 1
+            motorcycle_traffic_pack_b   = 26 + 1
+            painted_bdf_traffic_pack    = 35 + 1
+            painted_truck_traffic_pack  = 34 + 1
+            real_emergency_ai_pack_a    = 18 + 1
+            real_emergency_ai_pack_b    = 17 + 1
+            realistic_grass_textures    = 10 + 1
+            russian_traffic_pack_a      = 25 + 1
+            russian_traffic_pack_b      = 24 + 1
+            sport_cars_traffic_pack_a   = 31 + 1
+            sport_cars_traffic_pack_b   = 30 + 1
+            taxi_traffic_pack           = 23 + 1
+            trailers_traffic_pack       = 32 + 1
+            truck_traffic_pack          = 36 + 1
+            tuned_truck_traffic_pack    = 33 + 1
+        }
+        Return [Int16](($Priorities[$Mod] | Where-Object {$_}) - 1)
+    }
+
     Function Get-ModRepoFile {
-        [CmdletBinding()]
-        Param ([Parameter(Mandatory)][String]$File, [Byte]$XPos, [String]$State, [Switch]$UseIWR, [Switch]$Save)
+        [CmdletBinding(DefaultParameterSetName = 'NoIWR')]
+        Param (
+            [Parameter(Mandatory, Position = 0)][String]$File,
+            [Parameter(ParameterSetName = 'NoIWR', Position = 1)][Byte]$X,
+            [Parameter(ParameterSetName = 'NoIWR', Position = 2)][String]$State,
+            [Parameter(Mandatory, ParameterSetName = 'IWR')][Switch]$UseIWR,
+            [Parameter(ParameterSetName = 'IWR')][Switch]$Save
+        )
 
-        [Uri]$Uri = "http://your.online/ets2repo/$($File)"
+        [Uri]$Uri = "http://tams.pizza/ets2repo/$($File)"
 
-        If ($UseIWR) {
+        If ($PSCmdlet.ParameterSetName -eq 'IWR') {
             [Hashtable]$IWRSplat = @{
                 Uri             = $Uri
                 UseBasicParsing = $True
@@ -35,8 +73,8 @@ Function Sync-Ets2ModRepo {
         Function Measure-TransferRate {
             [CmdletBinding()]
             Param (
-                [Parameter(Mandatory)][Double]$Duration,
-                [Parameter(Mandatory)][UInt32]$Bytes,
+                [Parameter(Mandatory, Position = 0)][Double]$Duration,
+                [Parameter(Mandatory, Position = 1)][UInt32]$Bytes,
                 [ValidateSet('B/s', 'kB/s', 'MB/s', 'GB/s')][String]$Unit
             )
             [Double]$BytesPerSecond = $Bytes / $Duration
@@ -49,44 +87,50 @@ Function Sync-Ets2ModRepo {
                     {$_ -eq 'GB/s'} {($BytesPerSecond / 1GB)}
                 }
             }
-            Else {[Double]$ConvertedRate, [String]$UnitSymbol = If ($BytesPerSecond -lt 1MB) {@(($BytesPerSecond / 1kB), 'kB/s')} Else {@(($BytesPerSecond / 1MB), 'MB/s')}}
+            Else {[Double]$ConvertedRate, [String]$UnitSymbol = If ($BytesPerSecond -lt 1MB) {($BytesPerSecond / 1kB), 'kB/s'} Else {($BytesPerSecond / 1MB), 'MB/s'}}
             Return [String](("$([Math]::Round($ConvertedRate, 2))", "$([Math]::Round($ConvertedRate))")[($UnitSymbol -eq 'B/s')] + " $UnitSymbol")
         }
 
-        $HeaderRequest, $DownloadRequest                 = [Net.HttpWebRequest]::Create($Uri), [Net.HttpWebRequest]::Create($Uri)
-        $HeaderRequest.Method                            = 'HEAD'
-        $HeaderRequest.KeepAlive                         = $False
-        $HeaderRequest.Timeout, $DownloadRequest.Timeout = 15000, 15000
+        [Net.HttpWebRequest]$HeaderRequest = [Net.WebRequest]::CreateHttp($Uri)
+        $HeaderRequest.Method              = 'HEAD'
+        $HeaderRequest.KeepAlive           = $False
+        $HeaderRequest.Timeout             = 15000
+
+        [Net.HttpWebRequest]$DownloadRequest = [Net.WebRequest]::CreateHttp($Uri)
+        $DownloadRequest.Timeout             = 15000
 
         [Net.HttpWebResponse]$Header = $HeaderRequest.GetResponse()
         [UInt64]$DownloadSize        = $Header.ContentLength; $Header.Dispose()
         [UInt32]$BufferSize          = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min([Math]::Max(8192, $DownloadSize), [GC]::GetTotalMemory($False) / 10), 2)))
-        $Buffer                      = [Byte[]]::New($BufferSize)
+        [Byte[]]$Buffer              = New-Object Byte[] $BufferSize
+        
+        [DateTime]$IntervalStart       = (Get-Date).AddSeconds(-1)
 
         [Net.HttpWebResponse]$Download = $DownloadRequest.GetResponse()
-        $DownloadStream                = $Download.GetResponseStream()
-        $FileStream                    = [IO.FileStream]::New($File, 'Create')
-        [DateTime]$IntervalStart       = (Get-Date).AddSeconds(-1)
+        [IO.Stream]$DownloadStream     = $Download.GetResponseStream()
+        [IO.FileStream]$FileStream     = New-Object IO.FileStream $File, 'Create'
+        
         [UInt32]$BytesRead             = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
         [UInt64]$BytesDownloaded       = $BytesRead
-        [UInt32]$IntervalBytes         = 0
 
-        [UInt32]$Unit, [String]$Symbol, [UInt32]$ConvertedSize = If ($DownloadSize -lt 10000kB) {@(1kB, 'kB', ($DownloadSize / 1kB))} Else {@(1MB, 'MB', ($DownloadSize / 1MB))}
-        
+        [UInt32]$Unit, [String]$Symbol, [UInt32]$ConvertedSize = If ($DownloadSize -lt 10000kB) {1kB, 'kB', ($DownloadSize / 1kB)} Else {1MB, 'MB', ($DownloadSize / 1MB)}
+        [UInt32]$IntervalBytes, [UInt32]$ConvertedBytes, [Double]$IntervalLength = 0, 0, 0
+        [String]$TransferRate = '0 kB/s'
+
         While ($BytesRead -gt 0) {
             $FileStream.Write($Buffer, 0, $BytesRead)
-            $BytesRead              = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
-            $BytesDownloaded       += $BytesRead
-            [UInt32]$ConvertedBytes = $BytesDownloaded / $Unit
-            [Double]$IntervalLength = (New-TimeSpan $IntervalStart (Get-Date)).TotalSeconds
+            $BytesRead        = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
+            $BytesDownloaded += $BytesRead
+            $ConvertedBytes   = $BytesDownloaded / $Unit
+            $IntervalLength   = (New-TimeSpan $IntervalStart (Get-Date)).TotalSeconds
 
             If ($IntervalLength -ge 1) {
-                [String]$TransferRate = Measure-TransferRate -Duration $IntervalLength -Bytes ($BytesDownloaded - $IntervalBytes)
-                $IntervalBytes        = $BytesDownloaded
-                $IntervalStart        = Get-Date
+                $TransferRate  = Measure-TransferRate $IntervalLength ($BytesDownloaded - $IntervalBytes)
+                $IntervalBytes = $BytesDownloaded
+                $IntervalStart = Get-Date
             }
 
-            Write-HostX -X $XPos -NoNewline -ForegroundColor Green -Object "$State $ConvertedBytes/$ConvertedSize $Symbol ($TransferRate)      "
+            Write-HostX $X -Color Green "$State $ConvertedBytes/$ConvertedSize $Symbol ($TransferRate)      "
         }
 
         $Download.Dispose()
@@ -107,20 +151,15 @@ Function Sync-Ets2ModRepo {
     }
 
     [Console]::CursorVisible     = $False
-    [Version]$Version            = "2.8.4"
+    [Version]$Version            = "2.8.5"
     $ProgressPreference          = [Management.Automation.ActionPreference]::SilentlyContinue
     [String]$InstallDirectory    = [IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), 'Euro Truck Simulator 2', 'mod')
     [String]$SaveEditorDirectory = [IO.Path]::Combine((Get-Item $InstallDirectory).Parent.FullName, 'TruckSaveEditor')
     $Host.UI.RawUI.WindowTitle   = "ETS2 Mod Updater - v$Version"
 
     [String[]]$UpdateNotes = @(
-        '- Added transfer rate to progress display',
-        '- Added completion summary',
-        '- Added update notes display when updating the updater (update updates update)',
-        '- Download optimizations (more speed, more better)',
-        '- Fixed issue with failed updates and installs being registered as successful',
-        '- Improved user interface structure',
-        '- Made error messages less likely to break user interface',
+        '- Installed mods now displays required load priority upon completion',
+        '- Download optimizations',
         '- Stability improvements and futureproofing'
     )
 
@@ -173,21 +212,10 @@ Function Sync-Ets2ModRepo {
         @('Ai ', 'AI '),
         @('Bdf ', 'BDF ')
     )
-    [Hashtable]$F_Replace = @{
-        'classic_cars_traffic_a.scs' = 'classic_cars_traffic_pack_a.scs'
-        'classic_cars_traffic_b.scs' = 'classic_cars_traffic_pack_b.scs'
-        'sport_cars_traffic_a.scs'   = 'sport_cars_traffic_pack_a.scs'
-        'sport_cars_traffic_b.scs'   = 'sport_cars_traffic_pack_b.scs'
-        'tuned_truck_traffic.scs'    = 'tuned_truck_traffic_pack.scs' 
-    }
     If ([IO.File]::Exists('versions.txt')) {
         ForEach ($Entry in (Get-Content 'versions.txt')) {
             [String]$Name, [Version]$Ver = $Entry -Split '=', 2
-            ForEach ($FName in $F_Replace.GetEnumerator().Name) {
-                $FName = ($FName -Split '\.')[0]
-                If ($Name -Like $FName) {$Name = $FName; Break}
-            }
-            $Versions[$Name] = $Ver
+            $Versions[$Name]             = $Ver
             If ($Name.Length -gt $LongestName)                {$LongestName      = $Name.Length}
             If ($Ver.ToString().Length -gt $L_LongestVersion) {$L_LongestVersion = $Ver.ToString().Length}
         }
@@ -210,13 +238,13 @@ Function Sync-Ets2ModRepo {
     Write-Host " $('Mod'.PadRight($LongestName))$('Installed'.PadRight($L_LongestVersion))$('Current'.PadRight($E_LongestVersion))Status"
     Write-Host "$(-Join ('-' * $Host.UI.RawUI.BufferSize.Width))"
 
-    ForEach ($Entry in $F_Replace.GetEnumerator().Name) {If ([IO.File]::Exists($Entry)) {Rename-Item $Entry $F_Replace[$Entry]}}
-
     ForEach ($Entry in ($OnlineVersions.GetEnumerator() | Sort-Object 'Name').Name) {
 
         [String]$ModFile  = "$($Entry).scs"
         [String]$OldFile  = "old_$($ModFile)"
         [String]$ModTitle = $TextInfo.ToTitleCase($Entry.Replace('_', ' '))
+        [String]$Priority = Get-ModPriority $Entry
+        If ([Int]$Priority -eq -1) {$Priority = '?'}
         ForEach ($String in $Replace) {$ModTitle = $ModTitle.Replace($String[0], $String[1])}
 
         Write-Host -NoNewline " $($ModTitle.PadRight($LongestName))"
@@ -241,14 +269,14 @@ Function Sync-Ets2ModRepo {
 
             Try {
                 If ($Status -eq 'Updating...' -And $GameRunning) {Throw 'Euro Truck Simulator 2 needs to be closed to update mods.'}
-                [String]$Result = Get-ModRepoFile $ModFile -XPos $XPos -State $Status -ErrorAction Stop
+                [String]$Result = Get-ModRepoFile $ModFile $XPos $Status -ErrorAction Stop
 
                 If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
 
-                Write-HostX -X $XPos -NoNewline $ClearString
+                Write-HostX $XPos $ClearString
                 Switch ($Status) {
-                    'Updating...'   {Write-HostX -X $XPos -ForegroundColor Green "Updated       ($Result)"}
-                    'Installing...' {Write-HostX -X $XPos -ForegroundColor Green "Installed     ($Result)"}
+                    'Updating...'   {Write-HostX $XPos -Color Green "Updated       ($Result)" -Newline}
+                    'Installing...' {Write-HostX $XPos -Color Green "Installed     ($Result, Load order: $Priority)" -Newline}
                 }
                 $NewVersions += "$($Entry)=$($OnlineVersions[$Entry].ToString())"
                 $Successes++
@@ -258,8 +286,8 @@ Function Sync-Ets2ModRepo {
                 If ([IO.File]::Exists($OldFile)) {Rename-Item $OldFile $ModFile -Force -ErrorAction SilentlyContinue}
                 $Failures++
 
-                Write-HostX -X $XPos -NoNewline $ClearString
-                Write-HostX -X $XPos -ForegroundColor Red 'Failed'
+                Write-HostX $XPos $ClearString
+                Write-HostX $XPos -Color Red 'Failed' -Newline
                 Write-Host " $($_.Exception.Message)"
             }
         }
