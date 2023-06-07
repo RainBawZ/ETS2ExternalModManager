@@ -1,7 +1,9 @@
-#version=2.8.5
+#version=2.9.3
 Param ([String]$Updated)
 Function Sync-Ets2ModRepo {
     Param ([Switch]$Updated)
+
+    [DateTime]$GLOBAL:StartTime = (Get-Date).ToString("yyyy.MM.dd HH:mm:ss")
 
     Function Write-HostX {
         [CmdletBinding()]
@@ -11,42 +13,53 @@ Function Sync-Ets2ModRepo {
             [ConsoleColor]$Color,
             [Switch]$Newline
         )
-        [Hashtable]$WHSplat = @{Object = $Object}
+        [Byte]$ObjectLength = $Object.ToString().Length
+        [Hashtable]$WHSplat = @{}
+        $WHSplat['Object']  = "$($Object)$(-Join (' ' * ($Host.UI.RawUI.BufferSize.Width - $X - $ObjectLength - 1)))"
         If (!$Newline) {$WHSplat['NoNewline']       = $True}
         If ($Color)    {$WHSplat['ForegroundColor'] = $Color}
-        [Console]::SetCursorPosition($X, $Host.UI.RawUI.CursorPosition.Y)
+        If ($Host.Name -NotLike '*ISE*') {[Console]::SetCursorPosition($X, $Host.UI.RawUI.CursorPosition.Y)}
         Write-Host @WHSplat
     }
 
-    Function Get-ModPriority {
-        Param([Parameter(Mandatory)][String]$Mod)
-        [Hashtable]$Priorities = @{
-            ai_traffic_pack             = 38 + 1
-            better_road_events          = 39 + 1
-            brutal_traffic              = 19 + 1
-            bus_traffic_pack            = 37 + 1
-            classic_cars_traffic_pack_a = 29 + 1
-            classic_cars_traffic_pack_b = 28 + 1
-            military_cargo_pack_a       = 22 + 1
-            military_cargo_pack_b       = 21 + 1
-            military_cargo_pack_c       = 20 + 1
-            motorcycle_traffic_pack_a   = 27 + 1
-            motorcycle_traffic_pack_b   = 26 + 1
-            painted_bdf_traffic_pack    = 35 + 1
-            painted_truck_traffic_pack  = 34 + 1
-            real_emergency_ai_pack_a    = 18 + 1
-            real_emergency_ai_pack_b    = 17 + 1
-            realistic_grass_textures    = 10 + 1
-            russian_traffic_pack_a      = 25 + 1
-            russian_traffic_pack_b      = 24 + 1
-            sport_cars_traffic_pack_a   = 31 + 1
-            sport_cars_traffic_pack_b   = 30 + 1
-            taxi_traffic_pack           = 23 + 1
-            trailers_traffic_pack       = 32 + 1
-            truck_traffic_pack          = 36 + 1
-            tuned_truck_traffic_pack    = 33 + 1
+    Function Protect-Variables      {If (!$GLOBAL:PROTECTED) {[String[]]$GLOBAL:PROTECTED = (Get-Variable).Name + 'PROTECTED'} Else {Throw 'The object is already initialized'}}
+    Function Update-ProtectedVars   {If ($GLOBAL:PROTECTED) {Add-ProtectedVars (Get-UnprotectedVars)}}
+    Function Get-UnprotectedVars    {If ($GLOBAL:PROTECTED) {Return [String[]](Get-Variable -Exclude $GLOBAL:PROTECTED).Name}}
+    Function Remove-UnprotectedVars {If ($GLOBAL:PROTECTED) {Switch (Get-UnprotectedVars) {$Null {Return} Default {Remove-Variable $_ -ErrorAction SilentlyContinue}}}}
+    Function Unprotect-Variables    {If ($GLOBAL:PROTECTED) {Remove-Variable PROTECTED -Scope GLOBAL -ErrorAction Stop}}
+    Function Add-ProtectedVars {
+        [CmdletBinding()]
+        Param([Parameter(ValueFromPipeline)][String[]]$InputObject)
+        If ($InputObject -And $GLOBAL:PROTECTED) {$GLOBAL:PROTECTED += $InputObject}
+        $GLOBAL:PROTECTED = $GLOBAL:PROTECTED | Select-Object -Unique
+    }
+
+    Function Format-AndExportErrorData {
+        [CmdletBinding()]
+        Param ([Parameter(Mandatory)][Management.Automation.ErrorRecord]$Exception)
+        [Collections.Generic.List[String]]$Export = @("`n")
+        [String]$Message      = $Exception.Exception.Message
+        [String]$Details      = $Exception.ErrorDetails.Message
+        [String]$Position     = $Exception.InvocationInfo.PositionMessage
+        [String]$ReturnString = ($Details, $Message)[($Message.Length -gt $Details.Length)] # ($False, $True)[(eval)]
+        [Void]$Export.Add($Position)
+        [Void]$Export.Add($Message)
+        [Void]$Export.Add($Details)
+        [Void]$Export.Add("$(-Join ('- ' * 30))-")
+
+        Do {
+            [Int]$Index = $Export.IndexOf('')
+            If ($Index -ne -1) {$Export.RemoveAt($Index)}
+        } While ('' -In $Export)
+
+        If ($Export) {
+            If ([IO.File]::Exists('Error.log.txt')) {[DateTime]$LastWrite = (Get-Item 'Error.log.txt').LastWriteTime.ToString("yyyy.MM.dd HH:mm:ss")}
+            Else                                    {[DateTime]$LastWrite = $GLOBAL:StartTime + (New-TimeSpan -Hours 1)}
+            If ($LastWrite -gt $GLOBAL:StartTime) {Remove-Item 'Error.log.txt' -Force -ErrorAction SilentlyContinue}
+            $Export -Join "`n" | Out-File 'Error.log.txt' -Append
         }
-        Return [Int16](($Priorities[$Mod] | Where-Object {$_}) - 1)
+
+        Return $ReturnString
     }
 
     Function Get-ModRepoFile {
@@ -56,17 +69,19 @@ Function Sync-Ets2ModRepo {
             [Parameter(ParameterSetName = 'NoIWR', Position = 1)][Byte]$X,
             [Parameter(ParameterSetName = 'NoIWR', Position = 2)][String]$State,
             [Parameter(Mandatory, ParameterSetName = 'IWR')][Switch]$UseIWR,
-            [Parameter(ParameterSetName = 'IWR')][Switch]$Save
+            [Parameter(ParameterSetName = 'IWR')][Switch]$Save,
+            [String]$ContentType
         )
 
-        [Uri]$Uri = "http://tams.pizza/ets2repo/$($File)"
+        [Uri]$Uri = "http://your.server/repo/$($File)"
 
         If ($PSCmdlet.ParameterSetName -eq 'IWR') {
             [Hashtable]$IWRSplat = @{
                 Uri             = $Uri
                 UseBasicParsing = $True
             }
-            If ($Save) {$IWRSplat['OutFile'] = $File}
+            If ($Save)        {$IWRSplat['OutFile']     = $File}
+            If ($ContentType) {$IWRSplat['ContentType'] = $ContentType}
             Return Invoke-WebRequest @IWRSplat
         }
 
@@ -98,6 +113,7 @@ Function Sync-Ets2ModRepo {
 
         [Net.HttpWebRequest]$DownloadRequest = [Net.WebRequest]::CreateHttp($Uri)
         $DownloadRequest.Timeout             = 15000
+        $DownloadRequest.ContentType         = ($ContentType, $Null)[[String]::IsNullOrWhiteSpace($ContentType)]
 
         [Net.HttpWebResponse]$Header = $HeaderRequest.GetResponse()
         [UInt64]$DownloadSize        = $Header.ContentLength; $Header.Dispose()
@@ -105,23 +121,27 @@ Function Sync-Ets2ModRepo {
         [Byte[]]$Buffer              = New-Object Byte[] $BufferSize
         
         [DateTime]$IntervalStart       = (Get-Date).AddSeconds(-1)
-
         [Net.HttpWebResponse]$Download = $DownloadRequest.GetResponse()
         [IO.Stream]$DownloadStream     = $Download.GetResponseStream()
         [IO.FileStream]$FileStream     = New-Object IO.FileStream $File, 'Create'
         
-        [UInt32]$BytesRead             = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
-        [UInt64]$BytesDownloaded       = $BytesRead
+        [UInt32]$BytesRead       = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
+        [UInt64]$BytesDownloaded = $BytesRead
 
-        [UInt32]$Unit, [String]$Symbol, [UInt32]$ConvertedSize = If ($DownloadSize -lt 10000kB) {1kB, 'kB', ($DownloadSize / 1kB)} Else {1MB, 'MB', ($DownloadSize / 1MB)}
-        [UInt32]$IntervalBytes, [UInt32]$ConvertedBytes, [Double]$IntervalLength = 0, 0, 0
-        [String]$TransferRate = '0 kB/s'
+        [UInt32]$Unit, [String]$Symbol, [Byte]$Decimals = Switch ($DownloadSize) {
+            {$_ -lt 1000kB} {1kB, 'kB', 0; Break}
+            {$_ -lt 1000MB} {1MB, 'MB', 0; Break}
+            {$_ -ge 1000MB} {1GB, 'GB', 3; Break}
+        }
+        [String]$ConvertedDownload = "$([Math]::Round(($DownloadSize / $Unit), $Decimals)) $Symbol"
+
+        [UInt32]$IntervalBytes, [Double]$ConvertedBytes, [Double]$IntervalLength, [String]$TransferRate = 0, 0, 0, '0 kB/s'
 
         While ($BytesRead -gt 0) {
             $FileStream.Write($Buffer, 0, $BytesRead)
             $BytesRead        = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
             $BytesDownloaded += $BytesRead
-            $ConvertedBytes   = $BytesDownloaded / $Unit
+            $ConvertedBytes   = [Math]::Round(($BytesDownloaded / $Unit), $Decimals)
             $IntervalLength   = (New-TimeSpan $IntervalStart (Get-Date)).TotalSeconds
 
             If ($IntervalLength -ge 1) {
@@ -130,7 +150,7 @@ Function Sync-Ets2ModRepo {
                 $IntervalStart = Get-Date
             }
 
-            Write-HostX $X -Color Green "$State $ConvertedBytes/$ConvertedSize $Symbol ($TransferRate)      "
+            Write-HostX $X -Color Green "$State $("$ConvertedBytes".PadLeft(5))/$ConvertedDownload ($TransferRate)"
         }
 
         $Download.Dispose()
@@ -139,29 +159,49 @@ Function Sync-Ets2ModRepo {
         $FileStream.Dispose()
         $DownloadStream.Dispose()
 
-        Return [String]"$ConvertedSize $Symbol"
+        Return "$ConvertedDownload"
     }
 
+    Function Test-ModHash {
+        [CmdletBinding()]
+        Param (
+            [Parameter(Mandatory, Position = 0)][String]$File,
+            [Parameter(Mandatory, Position = 1)][String]$Hash
+        )
+        Return [Bool]((Get-FileHash $File).Hash -eq $Hash)
+    }
+
+    Function Test-ArrayNullOrEmpty {
+        [CmdletBinding()]
+        Param ([AllowEmptyCollection()][Object[]]$Array)
+        If ($Null -eq $Array) {Return $True}
+        Return ([Math]::Max($Array.IndexOf(''), $Array.IndexOf($Null)) -ne -1)
+    }
+    
     Function Wait-WriteAndExit {
         [CmdletBinding()]
         Param ([Parameter(Mandatory)][String]$InputObject)
         Write-Host -ForegroundColor Red $InputObject
+        Unprotect-Variables
         [Void](Read-Host)
         Exit
     }
 
+    Protect-Variables
+
     [Console]::CursorVisible     = $False
-    [Version]$Version            = "2.8.5"
+    [Version]$LocalVersion       = "2.9.3"
     $ProgressPreference          = [Management.Automation.ActionPreference]::SilentlyContinue
     [String]$InstallDirectory    = [IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), 'Euro Truck Simulator 2', 'mod')
     [String]$SaveEditorDirectory = [IO.Path]::Combine((Get-Item $InstallDirectory).Parent.FullName, 'TruckSaveEditor')
-    $Host.UI.RawUI.WindowTitle   = "ETS2 Mod Updater - v$Version"
+    [String]$UpdaterScript       = $PSCommandPath
+    $Host.UI.RawUI.WindowTitle   = "ETS2 Mod Updater - v$LocalVersion"
 
     [String[]]$UpdateNotes = @(
-        '- Installed mods now displays required load priority upon completion',
-        '- Download optimizations',
-        '- Stability improvements and futureproofing'
+        '- Fixed new mods failing to install'
     )
+
+    Update-ProtectedVars
 
     If (-Not [IO.Directory]::Exists($InstallDirectory)) {Wait-WriteAndExit "'$InstallDirectory' not found!"}
     If ($PSScriptRoot -ne $InstallDirectory)            {Wait-WriteAndExit "Please place the script in '$InstallDirectory'"}
@@ -171,25 +211,28 @@ Function Sync-Ets2ModRepo {
         Write-Host " Checking Updater version...`n"
         Write-Host ' Installed   Current   Status'
         Write-Host "$(-Join ('-' * $Host.UI.RawUI.BufferSize.Width))"
-        Write-Host -NoNewline " $($Version.ToString().PadRight(12))"
+        Write-Host -NoNewline " $($LocalVersion.ToString().PadRight(12))"
         Try {
-            [Byte[]]$UpdaterBytes    = (Get-ModRepoFile 'Update.ps1' -UseIWR).Content
-            [String]$UpdaterText     = [Text.Encoding]::ASCII.GetString($UpdaterBytes)
-            [Version]$UpdaterVersion = (($UpdaterText -Split "`n")[0] -Split '=')[1]
+            [Byte[]]$DownloadedBytes = (Get-ModRepoFile 'Update.ps1' -UseIWR -ContentType 'text/plain; charset=utf8').Content
+            [String]$DecodedBytes    = [Text.Encoding]::UTF8.GetString($DownloadedBytes)
+            [Version]$LatestVersion  = (($DecodedBytes -Split "`n")[0] -Split '=')[1]
 
-            If ($Version -lt $UpdaterVersion) {
-                Write-Host -NoNewline -ForegroundColor Green $UpdaterVersion.ToString().PadRight(10)
+            If ($LocalVersion -lt $LatestVersion) {
+                Write-Host -NoNewline -ForegroundColor Green $LatestVersion.ToString().PadRight(10)
 
-                [Void](Get-ModRepoFile 'Update.ps1' -UseIWR -Save)
+                $DecodedBytes | Set-Content $UpdaterScript -Force
+
+                Unprotect-Variables
+
                 Return 'Updated'
             }
             Else {
-                Write-Host -NoNewline $UpdaterVersion.ToString().PadRight(10)
+                Write-Host -NoNewline $LatestVersion.ToString().PadRight(10)
                 Write-Host -ForegroundColor Green 'Up to date'
             }
             Write-Host "`n"
         }
-        Catch {Write-Host -ForegroundColor Red 'File not found. Continuing.'}
+        Catch {Write-Host -ForegroundColor Red (Format-AndExportErrorData $_)}
     }
     Else {
         Write-Host -ForegroundColor Green 'Updated'
@@ -198,34 +241,79 @@ Function Sync-Ets2ModRepo {
         Start-Sleep -Seconds 1
     }
 
+    Remove-UnprotectedVars
+
     [Byte]$Failures                   = 0
+    [Byte]$Invalids                   = 0
     [Byte]$Successes                  = 0
     [Byte]$LongestName                = 3
     [Byte]$L_LongestVersion           = 9
     [Byte]$E_LongestVersion           = 7
     [String[]]$NewVersions            = @()
-    [Hashtable]$Versions              = @{}
-    [Hashtable]$OnlineVersions        = @{}
+    [Hashtable]$LocalMods             = @{}
+    [Hashtable]$OnlineData            = @{}
     [Globalization.TextInfo]$TextInfo = (Get-Culture).TextInfo
     [Bool]$GameRunning                = 'eurotrucks2' -In (Get-Process).Name
     [Collections.Generic.List[String[]]]$Replace = @(
         @('Ai ', 'AI '),
         @('Bdf ', 'BDF ')
     )
+
+    Update-ProtectedVars
+
     If ([IO.File]::Exists('versions.txt')) {
-        ForEach ($Entry in (Get-Content 'versions.txt')) {
-            [String]$Name, [Version]$Ver = $Entry -Split '=', 2
-            $Versions[$Name]             = $Ver
+        [UInt64]$Line = 0
+        ForEach ($RawData in (Get-Content 'versions.txt' -Encoding UTF8)) {
+            $Line++
+            [String[]]$ModData = ($RawData -Split '=', 3)[0..1]
+            If (Test-ArrayNullOrEmpty $ModData) {
+                Try     {Throw "versions.txt[$Line]: Invalid data"}
+                Catch   {[Void](Format-AndExportErrorData $_)}
+                Continue
+            }
+            [String]$Name, [Version]$Ver = $ModData
+            $LocalMods[$Name] = [Hashtable]@{
+                'FileName'   = "$($Name).scs"
+                'Version'    = $Ver
+                'VersionStr' = [String]$Ver
+            }
             If ($Name.Length -gt $LongestName)                {$LongestName      = $Name.Length}
             If ($Ver.ToString().Length -gt $L_LongestVersion) {$L_LongestVersion = $Ver.ToString().Length}
         }
     }
-    Try   {[String[]]$OnlineVersionData = (Get-ModRepoFile 'versions.txt' -UseIWR).Content -Split "`n"}
-    Catch {Wait-WriteAndExit "Unable to download version data. Try again later.`nReason: $($_.Exception.Message)"}
-    ForEach ($Entry in $OnlineVersionData) {
-        [String]$Name, [Version]$Ver = $Entry -Split '=', 2
-        $OnlineVersions[$Name]       = $Ver
+    
 
+    Try   {[String[]]$OnlineRawData = (Get-ModRepoFile 'versions.txt' -UseIWR -ContentType 'text/plain; charset=utf8').Content -Split "`n"}
+    Catch {Wait-WriteAndExit "Unable to download version data. Try again later.`nReason: $(Format-AndExportErrorData $_)"}
+
+    [UInt64]$Line = 0
+    ForEach ($RawData in ($OnlineRawData | Sort-Object)) {
+        $Line++
+        If ([String]::IsNullOrWhiteSpace($RawData)) {Continue}
+        If ($RawData.LastIndexOf(';') -eq -1) {
+            Try     {Throw "OnlineRawData[$Line]: Missing line terminator"}
+            Catch   {[Void](Format-AndExportErrorData $_)}
+            Continue
+        }
+        [String[]]$ModData = $RawData.Substring(0, $RawData.LastIndexOf(';')) -Split "=", 5
+        If (Test-ArrayNullOrEmpty $ModData) {
+            Try     {Throw "OnlineRawData[$Line]: Malformed entry: One or more items are Null"}
+            Catch   {[Void](Format-AndExportErrorData $_)}
+            Continue
+        }
+        [String]$Name, [Version]$Ver, [Byte]$LoadIndex, [Byte]$IsActive, [String]$Hash = $ModData
+        [String]$Title = $TextInfo.ToTitleCase($Name.Replace('_', ' '))
+        ForEach ($String in $Replace) {$Title = $Title.Replace($String[0], $String[1])}
+        $OnlineData[$Name] = [Hashtable]@{
+            'Name'       = $Name
+            'Title'      = $Title
+            'FileName'   = "$($Name).scs"
+            'Version'    = $Ver
+            'VersionStr' = [String]$Ver
+            'Hash'       = $Hash
+            'Index'      = $LoadIndex
+            'Active'     = [Bool]$IsActive
+        }
         If ($Name.Length -gt $LongestName)                {$LongestName      = $Name.Length}
         If ($Ver.ToString().Length -gt $E_LongestVersion) {$E_LongestVersion = $Ver.ToString().Length}
     }
@@ -238,63 +326,68 @@ Function Sync-Ets2ModRepo {
     Write-Host " $('Mod'.PadRight($LongestName))$('Installed'.PadRight($L_LongestVersion))$('Current'.PadRight($E_LongestVersion))Status"
     Write-Host "$(-Join ('-' * $Host.UI.RawUI.BufferSize.Width))"
 
-    ForEach ($Entry in ($OnlineVersions.GetEnumerator() | Sort-Object 'Name').Name) {
+    ForEach ($CurrentMod in ($OnlineData.GetEnumerator() | Sort-Object Name).Value) {
 
-        [String]$ModFile  = "$($Entry).scs"
-        [String]$OldFile  = "old_$($ModFile)"
-        [String]$ModTitle = $TextInfo.ToTitleCase($Entry.Replace('_', ' '))
-        [String]$Priority = Get-ModPriority $Entry
-        If ([Int]$Priority -eq -1) {$Priority = '?'}
-        ForEach ($String in $Replace) {$ModTitle = $ModTitle.Replace($String[0], $String[1])}
+        [String]$OldFile     = "old_$($CurrentMod.FileName)"
+        [String]$Priority    = 'Load order: ' + ('Inactive', $CurrentMod.Index)[($CurrentMod.Active)]
+        [Hashtable]$LocalMod = $LocalMods.($CurrentMod.Name)
 
-        Write-Host -NoNewline " $($ModTitle.PadRight($LongestName))"
+        Write-Host -NoNewline " $($CurrentMod.Title.PadRight($LongestName))"
 
-        If ($Versions[$Entry] -And [IO.File]::Exists($ModFile)) {
-            Write-Host -NoNewline $Versions[$Entry].ToString().PadRight($L_LongestVersion)
+        If ($LocalMod.Version -And [IO.File]::Exists($CurrentMod.FileName)) {
             [String]$Status = 'Updating...'
+            Write-Host -NoNewline $LocalMod.VersionStr.PadRight($L_LongestVersion)
         }
         Else {
-            If (![IO.File]::Exists($ModFile)) {$Versions[$Entry] = [Version]"0.0"}
-            Write-Host -NoNewline '---'.PadRight($L_LongestVersion)
             [String]$Status = 'Installing...'
+            Write-Host -NoNewline '---'.PadRight($L_LongestVersion)
         }
 
-        If ($Versions[$Entry] -lt $OnlineVersions[$Entry]) {
-            Write-Host -NoNewline -ForegroundColor Green $OnlineVersions[$Entry].ToString().PadRight($E_LongestVersion)
+        [ConsoleColor]$VersionColor = ("Green", "White")[($LocalMod.Version -ge $CurrentMod.Version)]
+        Write-Host -NoNewline -ForegroundColor $VersionColor $CurrentMod.VersionStr.PadRight($E_LongestVersion)
+        [Byte]$XPos = $Host.UI.RawUI.CursorPosition.X
 
-            [Byte]$XPos          = $Host.UI.RawUI.CursorPosition.X
-            [String]$ClearString = "$(-Join (' ' * ($Host.UI.RawUI.BufferSize.Width - $XPos - 1)))"
-
-            If ([IO.File]::Exists($ModFile)) {Rename-Item $ModFile $OldFile -Force -ErrorAction SilentlyContinue}
+        If ($LocalMod.Version -ge $CurrentMod.Version) {
+            Write-Host -NoNewline 'Validating...'
+            If (!(Test-ModHash $LocalMod.FileName $CurrentMod.Hash)) {
+                Write-HostX $XPos -Color Red 'Validation failed.'
+                Start-Sleep -Seconds 1
+                [String]$Status      = 'Reinstalling...'
+                $LocalMod['Version'] = [Version]"0.0"
+            }
+            Else {
+                Write-HostX $XPos -Color Green 'Up to date' -Newline
+                $NewVersions += "$($CurrentMod.Name)=$($CurrentMod.VersionStr)"
+                Continue
+            }
+        }
+        If ($LocalMod.Version -lt $CurrentMod.Version) {
+            If ([IO.File]::Exists($CurrentMod.FileName)) {Rename-Item $CurrentMod.FileName $OldFile -Force -ErrorAction SilentlyContinue}
 
             Try {
                 If ($Status -eq 'Updating...' -And $GameRunning) {Throw 'Euro Truck Simulator 2 needs to be closed to update mods.'}
-                [String]$Result = Get-ModRepoFile $ModFile $XPos $Status -ErrorAction Stop
+                [String]$Result = Get-ModRepoFile $CurrentMod.FileName $XPos $Status -ErrorAction Stop
 
                 If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
 
-                Write-HostX $XPos $ClearString
+                Write-HostX $XPos 'Validating...'
+                If (!(Test-ModHash $CurrentMod.FileName $CurrentMod.Hash)) {Throw 'Validation failed.'}
                 Switch ($Status) {
-                    'Updating...'   {Write-HostX $XPos -Color Green "Updated       ($Result)" -Newline}
-                    'Installing...' {Write-HostX $XPos -Color Green "Installed     ($Result, Load order: $Priority)" -Newline}
+                    'Updating...'     {Write-HostX $XPos -Color Green "Updated        ($Result)" -Newline}
+                    'Installing...'   {Write-HostX $XPos -Color Green "Installed      ($Result, $Priority)" -Newline}
+                    'Reinstalling...' {Write-HostX $XPos -Color Green "Reinstalled    ($Result)" -Newline}
                 }
-                $NewVersions += "$($Entry)=$($OnlineVersions[$Entry].ToString())"
+                $NewVersions += "$($CurrentMod.Name)=$($CurrentMod.VersionStr)"
                 $Successes++
             }
             Catch {
-                If ([IO.File]::Exists($ModFile)) {Remove-Item $ModFile -Force -ErrorAction SilentlyContinue}
-                If ([IO.File]::Exists($OldFile)) {Rename-Item $OldFile $ModFile -Force -ErrorAction SilentlyContinue}
+                If ([IO.File]::Exists($CurrentMod.FileName)) {Remove-Item $CurrentMod.FileName -Force -ErrorAction SilentlyContinue}
+                If ([IO.File]::Exists($OldFile))             {Rename-Item $OldFile $CurrentMod.FileName -Force -ErrorAction SilentlyContinue}
+                $NewVersions += "$($CurrentMod.Name)=$($LocalMod.VersionStr)"
                 $Failures++
 
-                Write-HostX $XPos $ClearString
-                Write-HostX $XPos -Color Red 'Failed' -Newline
-                Write-Host " $($_.Exception.Message)"
+                Write-HostX $XPos -Color Red "Failed: $(Format-AndExportErrorData $_)" -Newline
             }
-        }
-        Else {
-            Write-Host -NoNewline $OnlineVersions[$Entry].ToString().PadRight($E_LongestVersion)
-            Write-Host -ForegroundColor Green 'Up to date'
-            $NewVersions += "$($Entry)=$($OnlineVersions[$Entry].ToString())"
         }
     }
     If (![IO.Directory]::Exists($SaveEditorDirectory)) {
@@ -328,20 +421,25 @@ Function Sync-Ets2ModRepo {
         }
     }
 
-    $NewVersions -Join "`n" | Out-File 'versions.txt' -Force
+    $NewVersions -Join "`n" | Set-Content 'versions.txt'
 
     [String]$S_PluralMod  = 'mod' + ('s', '')[($Successes -eq 1)]
     [String]$F_PluralMod  = 'mod' + ('s', '')[($Failures -eq 1)]
-    [ConsoleColor]$Color  = Switch ($Null) {{$Failures -eq 0} {"Green"} {$Failures -gt 0 -And $Successes -eq 0} {"Red"} {$Failures -gt 0 -And $Successes -gt 0} {"Yellow"}}
-    [Hashtable]$TextColor = @{ForegroundColor = $Color}
+    [String]$I_PluralMod  = 'mod' + ('s', '')[($Invalids -eq 1)] 
+    [ConsoleColor]$ColorA = Switch ($Null) {{$Failures -eq 0} {"Green"} {$Failures -gt 0 -And $Successes -eq 0} {"Red"} {$Failures -gt 0 -And $Successes -gt 0} {"Yellow"}}
+    [ConsoleColor]$ColorB = ("White", "Yellow", "Red")[[Math]::Min(2, [Math]::Ceiling($Invalids / 2))]
+    [Hashtable]$TextColor = @{ForegroundColor = $ColorA}
     
     Write-Host @TextColor "`n Done`n"
     If (($Successes + $Failures) -eq 0) {Write-Host @TextColor ' All mods up to date'}
     If ($Successes -gt 0)               {Write-Host @TextColor " $Successes $S_PluralMod processed successfully"}
     If ($Failures -gt 0)                {Write-Host @TextColor " $Failures $F_PluralMod failed to process"}
+    If ($Invalids -gt 0)                {Write-Host -ForegroundColor $ColorB " $Invalids $I_PluralMod failed to validate"}
+    If (($Failures + $Invalids) -gt 0)  {Write-Host @TextColor "`n Exit and restart the updater to try again"}
 
     [Void](Read-Host)
     Return
 }
 If (!$Updated) {If (Sync-Ets2ModRepo) {& "$PSScriptRoot\Update.ps1" @('Updated')}}
 Else {[Void](Sync-Ets2ModRepo -Updated)}
+
