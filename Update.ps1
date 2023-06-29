@@ -1,33 +1,31 @@
-#version=2.9.3
+#version=2.9.9
 Param ([String]$Updated)
 Function Sync-Ets2ModRepo {
     Param ([Switch]$Updated)
 
-    [DateTime]$GLOBAL:StartTime = (Get-Date).ToString("yyyy.MM.dd HH:mm:ss")
-
     Function Write-HostX {
         [CmdletBinding()]
         Param (
-            [Parameter(Mandatory, Position = 1, ValueFromRemainingArguments)][Object]$Object,
+            [Parameter(Mandatory, Position = 1, ValueFromRemainingArguments)][String]$InputString,
             [Parameter(Mandatory, Position = 0)][ValidateScript({$_ -In (0..$Host.UI.RawUI.BufferSize.Width)})][Byte]$X,
             [ConsoleColor]$Color,
             [Switch]$Newline
         )
-        [Byte]$ObjectLength = $Object.ToString().Length
+        [Byte]$InputLength = $InputString.Length
         [Hashtable]$WHSplat = @{}
-        $WHSplat['Object']  = "$($Object)$(-Join (' ' * ($Host.UI.RawUI.BufferSize.Width - $X - $ObjectLength - 1)))"
+        $WHSplat['Object']  = "$($InputString)$(-Join (' ' * ($Host.UI.RawUI.BufferSize.Width - $X - $InputLength)))"
         If (!$Newline) {$WHSplat['NoNewline']       = $True}
         If ($Color)    {$WHSplat['ForegroundColor'] = $Color}
         If ($Host.Name -NotLike '*ISE*') {[Console]::SetCursorPosition($X, $Host.UI.RawUI.CursorPosition.Y)}
         Write-Host @WHSplat
     }
 
-    Function Protect-Variables      {If (!$GLOBAL:PROTECTED) {[String[]]$GLOBAL:PROTECTED = (Get-Variable).Name + 'PROTECTED'} Else {Throw 'The object is already initialized'}}
+    Function Protect-Variables      {If ($GLOBAL:PROTECTED) {Throw 'The object is already initialized'} Else {[String[]]$GLOBAL:PROTECTED = (Get-Variable).Name + 'PROTECTED'}}
     Function Update-ProtectedVars   {If ($GLOBAL:PROTECTED) {Add-ProtectedVars (Get-UnprotectedVars)}}
     Function Get-UnprotectedVars    {If ($GLOBAL:PROTECTED) {Return [String[]](Get-Variable -Exclude $GLOBAL:PROTECTED).Name}}
     Function Remove-UnprotectedVars {If ($GLOBAL:PROTECTED) {Switch (Get-UnprotectedVars) {$Null {Return} Default {Remove-Variable $_ -ErrorAction SilentlyContinue}}}}
     Function Unprotect-Variables    {If ($GLOBAL:PROTECTED) {Remove-Variable PROTECTED -Scope GLOBAL -ErrorAction Stop}}
-    Function Add-ProtectedVars {
+    Function Add-ProtectedVars      {
         [CmdletBinding()]
         Param([Parameter(ValueFromPipeline)][String[]]$InputObject)
         If ($InputObject -And $GLOBAL:PROTECTED) {$GLOBAL:PROTECTED += $InputObject}
@@ -52,14 +50,35 @@ Function Sync-Ets2ModRepo {
             If ($Index -ne -1) {$Export.RemoveAt($Index)}
         } While ('' -In $Export)
 
-        If ($Export) {
+        If ($Export[2]) {
             If ([IO.File]::Exists('Error.log.txt')) {[DateTime]$LastWrite = (Get-Item 'Error.log.txt').LastWriteTime.ToString("yyyy.MM.dd HH:mm:ss")}
-            Else                                    {[DateTime]$LastWrite = $GLOBAL:StartTime + (New-TimeSpan -Hours 1)}
-            If ($LastWrite -gt $GLOBAL:StartTime) {Remove-Item 'Error.log.txt' -Force -ErrorAction SilentlyContinue}
+            Else                                    {[DateTime]$LastWrite = $GLOBAL:StartTime - (New-TimeSpan -Hours 1)}
+            If ($GLOBAL:StartTime -gt $LastWrite) {Remove-Item 'Error.log.txt' -Force -ErrorAction SilentlyContinue}
             $Export -Join "`n" | Out-File 'Error.log.txt' -Append
         }
 
         Return $ReturnString
+    }
+
+    Function Measure-TransferRate {
+        [CmdletBinding()]
+        Param (
+            [Parameter(Mandatory, Position = 0)][Double]$Duration,
+            [Parameter(Mandatory, Position = 1)][UInt32]$Bytes,
+            [ValidateSet('B/s', 'kB/s', 'MB/s', 'GB/s')][String]$Unit
+        )
+        [Double]$BytesPerSecond = $Bytes / $Duration
+        If ($Unit) {
+            [String]$UnitSymbol    = $Unit.ToLower().Replace('b', 'B').Replace('m', 'M').Replace('g', 'G')
+            [Double]$ConvertedRate = Switch ($UnitSymbol) {
+                {$_ -eq 'B/s'}  {$BytesPerSecond}
+                {$_ -eq 'kB/s'} {($BytesPerSecond / 1kB)}
+                {$_ -eq 'MB/s'} {($BytesPerSecond / 1MB)}
+                {$_ -eq 'GB/s'} {($BytesPerSecond / 1GB)}
+            }
+        }
+        Else {[Double]$ConvertedRate, [String]$UnitSymbol = If ($BytesPerSecond -lt 1MB) {($BytesPerSecond / 1kB), 'kB/s'} Else {($BytesPerSecond / 1MB), 'MB/s'}}
+        Return [String](("$([Math]::Round($ConvertedRate, 2))", "$([Math]::Round($ConvertedRate))")[($UnitSymbol -eq 'B/s')] + " $UnitSymbol")
     }
 
     Function Get-ModRepoFile {
@@ -73,7 +92,7 @@ Function Sync-Ets2ModRepo {
             [String]$ContentType
         )
 
-        [Uri]$Uri = "http://your.server/repo/$($File)"
+        [Uri]$Uri = "http://your.domain/modrepo/$($File)"
 
         If ($PSCmdlet.ParameterSetName -eq 'IWR') {
             [Hashtable]$IWRSplat = @{
@@ -83,27 +102,6 @@ Function Sync-Ets2ModRepo {
             If ($Save)        {$IWRSplat['OutFile']     = $File}
             If ($ContentType) {$IWRSplat['ContentType'] = $ContentType}
             Return Invoke-WebRequest @IWRSplat
-        }
-
-        Function Measure-TransferRate {
-            [CmdletBinding()]
-            Param (
-                [Parameter(Mandatory, Position = 0)][Double]$Duration,
-                [Parameter(Mandatory, Position = 1)][UInt32]$Bytes,
-                [ValidateSet('B/s', 'kB/s', 'MB/s', 'GB/s')][String]$Unit
-            )
-            [Double]$BytesPerSecond = $Bytes / $Duration
-            If ($Unit) {
-                [String]$UnitSymbol    = $Unit.ToLower().Replace('b', 'B').Replace('m', 'M').Replace('g', 'G')
-                [Double]$ConvertedRate = Switch ($UnitSymbol) {
-                    {$_ -eq 'B/s'}  {$BytesPerSecond}
-                    {$_ -eq 'kB/s'} {($BytesPerSecond / 1kB)}
-                    {$_ -eq 'MB/s'} {($BytesPerSecond / 1MB)}
-                    {$_ -eq 'GB/s'} {($BytesPerSecond / 1GB)}
-                }
-            }
-            Else {[Double]$ConvertedRate, [String]$UnitSymbol = If ($BytesPerSecond -lt 1MB) {($BytesPerSecond / 1kB), 'kB/s'} Else {($BytesPerSecond / 1MB), 'MB/s'}}
-            Return [String](("$([Math]::Round($ConvertedRate, 2))", "$([Math]::Round($ConvertedRate))")[($UnitSymbol -eq 'B/s')] + " $UnitSymbol")
         }
 
         [Net.HttpWebRequest]$HeaderRequest = [Net.WebRequest]::CreateHttp($Uri)
@@ -131,7 +129,7 @@ Function Sync-Ets2ModRepo {
         [UInt32]$Unit, [String]$Symbol, [Byte]$Decimals = Switch ($DownloadSize) {
             {$_ -lt 1000kB} {1kB, 'kB', 0; Break}
             {$_ -lt 1000MB} {1MB, 'MB', 0; Break}
-            {$_ -ge 1000MB} {1GB, 'GB', 3; Break}
+            {$_ -ge 1000MB} {1GB, 'GB', 2; Break}
         }
         [String]$ConvertedDownload = "$([Math]::Round(($DownloadSize / $Unit), $Decimals)) $Symbol"
 
@@ -159,7 +157,19 @@ Function Sync-Ets2ModRepo {
         $FileStream.Dispose()
         $DownloadStream.Dispose()
 
-        Return "$ConvertedDownload"
+        Return @("$ConvertedDownload", $BytesDownloaded)
+    }
+
+    Function Test-ModActive {
+        [CmdletBinding()]
+        Param (
+            [Parameter(Mandatory, Position = 0)][String]$Log,
+            [Parameter(Mandatory, Position = 1)][String]$Mod
+        )
+        If (![IO.File]::Exists($Log)) {Return $False}
+        [String[]]$LogData = Get-Content $Log -Encoding UTF8
+        ForEach ($Line in $LogData) {If ($Line -Match " \: \[mods\] Active local mod $($Mod) ") {Return $True}}
+        Return $False
     }
 
     Function Test-ModHash {
@@ -168,7 +178,7 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory, Position = 0)][String]$File,
             [Parameter(Mandatory, Position = 1)][String]$Hash
         )
-        Return [Bool]((Get-FileHash $File).Hash -eq $Hash)
+        Return [Bool]((Get-FileHash -Algorithm SHA1 $File).Hash -eq $Hash)
     }
 
     Function Test-ArrayNullOrEmpty {
@@ -190,15 +200,18 @@ Function Sync-Ets2ModRepo {
     Protect-Variables
 
     [Console]::CursorVisible     = $False
-    [Version]$LocalVersion       = "2.9.3"
+    [Version]$LocalVersion       = "2.9.9"
     $ProgressPreference          = [Management.Automation.ActionPreference]::SilentlyContinue
-    [String]$InstallDirectory    = [IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), 'Euro Truck Simulator 2', 'mod')
-    [String]$SaveEditorDirectory = [IO.Path]::Combine((Get-Item $InstallDirectory).Parent.FullName, 'TruckSaveEditor')
+    [String]$GameRoot            = [IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), 'Euro Truck Simulator 2')
+    [String]$InstallDirectory    = [IO.Path]::Combine($GameRoot, 'mod')
+    [String]$SaveEditorDirectory = [IO.Path]::Combine($GameRoot, 'TruckSaveEditor')
+    [String]$GameLogPath         = [IO.Path]::Combine($GameRoot, 'game.log.txt')
     [String]$UpdaterScript       = $PSCommandPath
     $Host.UI.RawUI.WindowTitle   = "ETS2 Mod Updater - v$LocalVersion"
 
     [String[]]$UpdateNotes = @(
-        '- Fixed new mods failing to install'
+        '- Fixed issue where summary would always be represented in bytes if data was removed',
+        '- Rounded summary to two or one decimal'
     )
 
     Update-ProtectedVars
@@ -208,6 +221,9 @@ Function Sync-Ets2ModRepo {
     Set-Location $InstallDirectory
 
     If (!$Updated) {
+        [DateTime]$GLOBAL:StartTime = (Get-Date).ToString("yyyy.MM.dd HH:mm:ss")
+
+        Clear-Host
         Write-Host " Checking Updater version...`n"
         Write-Host ' Installed   Current   Status'
         Write-Host "$(-Join ('-' * $Host.UI.RawUI.BufferSize.Width))"
@@ -249,6 +265,8 @@ Function Sync-Ets2ModRepo {
     [Byte]$LongestName                = 3
     [Byte]$L_LongestVersion           = 9
     [Byte]$E_LongestVersion           = 7
+    [Int64]$DownloadedData            = 0
+    [Int64]$TotalBytes                = 0
     [String[]]$NewVersions            = @()
     [Hashtable]$LocalMods             = @{}
     [Hashtable]$OnlineData            = @{}
@@ -362,22 +380,27 @@ Function Sync-Ets2ModRepo {
             }
         }
         If ($LocalMod.Version -lt $CurrentMod.Version) {
-            If ([IO.File]::Exists($CurrentMod.FileName)) {Rename-Item $CurrentMod.FileName $OldFile -Force -ErrorAction SilentlyContinue}
+            If ([IO.File]::Exists($CurrentMod.FileName)) {
+                [Int64]$OriginalSize = Get-ItemPropertyValue $CurrentMod.FileName Length
+                Rename-Item $CurrentMod.FileName $OldFile -Force -ErrorAction SilentlyContinue
+            }
+            Else {[Int64]$OriginalSize = 0}
 
             Try {
-                If ($Status -eq 'Updating...' -And $GameRunning) {Throw 'Euro Truck Simulator 2 needs to be closed to update mods.'}
-                [String]$Result = Get-ModRepoFile $CurrentMod.FileName $XPos $Status -ErrorAction Stop
+                If ($Status -eq 'Updating...' -And $GameRunning -And (Test-ModActive $GameLogPath $CurrentMod.Name)) {Throw 'Euro Truck Simulator 2 must be closed to update this mod.'}
+                [String]$Result, [Int64]$NewSize = Get-ModRepoFile $CurrentMod.FileName $XPos $Status -ErrorAction Stop
 
                 If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
 
                 Write-HostX $XPos 'Validating...'
-                If (!(Test-ModHash $CurrentMod.FileName $CurrentMod.Hash)) {Throw 'Validation failed.'}
+                If (!(Test-ModHash $CurrentMod.FileName $CurrentMod.Hash)) {Throw 'Validation unsuccessful.'}
                 Switch ($Status) {
                     'Updating...'     {Write-HostX $XPos -Color Green "Updated        ($Result)" -Newline}
                     'Installing...'   {Write-HostX $XPos -Color Green "Installed      ($Result, $Priority)" -Newline}
                     'Reinstalling...' {Write-HostX $XPos -Color Green "Reinstalled    ($Result)" -Newline}
                 }
-                $NewVersions += "$($CurrentMod.Name)=$($CurrentMod.VersionStr)"
+                $NewVersions    += "$($CurrentMod.Name)=$($CurrentMod.VersionStr)"
+                $DownloadedData += ($NewSize - $OriginalSize)
                 $Successes++
             }
             Catch {
@@ -429,17 +452,33 @@ Function Sync-Ets2ModRepo {
     [ConsoleColor]$ColorA = Switch ($Null) {{$Failures -eq 0} {"Green"} {$Failures -gt 0 -And $Successes -eq 0} {"Red"} {$Failures -gt 0 -And $Successes -gt 0} {"Yellow"}}
     [ConsoleColor]$ColorB = ("White", "Yellow", "Red")[[Math]::Min(2, [Math]::Ceiling($Invalids / 2))]
     [Hashtable]$TextColor = @{ForegroundColor = $ColorA}
+
+    [String]$DownloadedStr = Switch ($DownloadedData) {
+        {[Math]::Abs($_) -lt 1024}   {"$_ B"; Break}
+        {[Math]::Abs($_) -lt 1024kB} {"$([Math]::Round(($_/1kB), 1)) kB"; Break}
+        {[Math]::Abs($_) -lt 1024MB} {"$([Math]::Round(($_/1MB), 1)) MB"; Break}
+        {[Math]::Abs($_) -ge 1024MB} {"$([Math]::Round(($_/1GB), 2)) GB"; Break}
+    }
+    If ($DownloadedData -gt 0) {$DownloadedStr = "+$($DownloadedStr)"}
+
+    ForEach ($Filesize in (Get-ItemPropertyValue "*.scs" Length)) {$TotalBytes += $Filesize}
+    [String]$TotalStr = Switch ($TotalBytes) {
+        {$_ -lt 1024}   {"$_ B"; Break}
+        {$_ -lt 1024kB} {"$([Math]::Round(($_/1kB), 1)) kB"; Break}
+        {$_ -lt 1024MB} {"$([Math]::Round(($_/1MB), 1)) MB"; Break}
+        {$_ -ge 1024MB} {"$([Math]::Round(($_/1GB), 2)) GB"; Break}
+    }
     
     Write-Host @TextColor "`n Done`n"
     If (($Successes + $Failures) -eq 0) {Write-Host @TextColor ' All mods up to date'}
-    If ($Successes -gt 0)               {Write-Host @TextColor " $Successes $S_PluralMod processed successfully"}
+    If ($Successes -gt 0)               {Write-Host @TextColor " $Successes $S_PluralMod processed successfully - $TotalStr ($DownloadedStr)"}
     If ($Failures -gt 0)                {Write-Host @TextColor " $Failures $F_PluralMod failed to process"}
     If ($Invalids -gt 0)                {Write-Host -ForegroundColor $ColorB " $Invalids $I_PluralMod failed to validate"}
     If (($Failures + $Invalids) -gt 0)  {Write-Host @TextColor "`n Exit and restart the updater to try again"}
 
     [Void](Read-Host)
+    Unprotect-Variables
     Return
 }
 If (!$Updated) {If (Sync-Ets2ModRepo) {& "$PSScriptRoot\Update.ps1" @('Updated')}}
 Else {[Void](Sync-Ets2ModRepo -Updated)}
-
