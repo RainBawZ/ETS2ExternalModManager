@@ -1,4 +1,4 @@
-#version=2.9.10
+#version=2.9.12
 Param ([String]$Updated)
 Function Sync-Ets2ModRepo {
     Param ([String]$Updated)
@@ -11,7 +11,7 @@ Function Sync-Ets2ModRepo {
             [ConsoleColor]$Color,
             [Switch]$Newline
         )
-        [Byte]$InputLength = $InputString.Length
+        [Byte]$InputLength  = $InputString.Length
         [Hashtable]$WHSplat = @{}
         $WHSplat['Object']  = "$($InputString)$(-Join (' ' * ($Host.UI.RawUI.BufferSize.Width - $X - $InputLength)))"
         If (!$Newline) {$WHSplat['NoNewline']       = $True}
@@ -35,7 +35,7 @@ Function Sync-Ets2ModRepo {
     Function Format-AndExportErrorData {
         [CmdletBinding()]
         Param ([Parameter(Mandatory)][Management.Automation.ErrorRecord]$Exception)
-        [Collections.Generic.List[String]]$Export = @("`n")
+        [Collections.Generic.List[String]]$Export = @("`n", "At: $((Get-Date).ToString("yyyy.MM.dd HH:mm:ss :"))")
         [String]$Message      = $Exception.Exception.Message
         [String]$Details      = $Exception.ErrorDetails.Message
         [String]$Position     = $Exception.InvocationInfo.PositionMessage
@@ -92,7 +92,7 @@ Function Sync-Ets2ModRepo {
             [String]$ContentType
         )
 
-        [Uri]$Uri = "http://tams.pizza/ets2repo/$($File)"
+        [Uri]$Uri = "http://your.domain/repo/$($File)"
 
         If ($PSCmdlet.ParameterSetName -eq 'IWR') {
             [Hashtable]$IWRSplat = @{
@@ -198,10 +198,12 @@ Function Sync-Ets2ModRepo {
         Exit
     }
 
+    Trap {Wait-WriteAndExit "`n`nFATAL ERROR`n$(Format-AndExportErrorData $_)"}
+
     Protect-Variables
 
     [Console]::CursorVisible     = $False
-    [Version]$LocalVersion       = "2.9.10"
+    [Version]$LocalVersion       = "2.9.12"
     [String]$GameRoot            = [IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), 'Euro Truck Simulator 2')
     [String]$InstallDirectory    = [IO.Path]::Combine($GameRoot, 'mod')
     [String]$SaveEditorDirectory = [IO.Path]::Combine($GameRoot, 'TruckSaveEditor')
@@ -211,10 +213,8 @@ Function Sync-Ets2ModRepo {
     $ProgressPreference          = [Management.Automation.ActionPreference]::SilentlyContinue
 
     [String[]]$UpdateNotes = @(
-        '- Improved integrity validation',
-        '- Improved update handling',
-        '- Implemented JSON-based internal version data handling',
-        '- Minor UI improvements'
+        'UPCOMING: Active mods management',
+        '- Fixed issue where mods with updates available would fail validation.'
     )
 
     Update-ProtectedVars
@@ -241,14 +241,9 @@ Function Sync-Ets2ModRepo {
             [Version]$LatestVersion  = ("0.0", $VersionString)[[Bool]($VersionString -As [Version])]
 
             If ($LocalVersion -lt $LatestVersion) {
-                If ($LatestVersion -eq "0.0") {
-                    Write-Host -NoNewline -ForegroundColor Red 'Parsing error'.PadRight($Padding)
-                    [String]$ReturnValue = 'Repaired'
-                }
-                Else {
-                    Write-Host -NoNewline -ForegroundColor Green $LatestVersion.ToString().PadRight($Padding)
-                    [String]$ReturnValue = 'Updated'
-                }
+                [ConsoleColor]$VersionColor, [String]$VersionText, [String]$ReturnValue = (@("Green", $LatestVersion.ToString(), 'Updated'), @("Red", 'Parsing error', 'Repaired'))[$LatestVersion -eq "0.0"]
+
+                Write-Host -NoNewline -ForegroundColor $VersionColor $VersionText.PadRight($Padding)
 
                 $DecodedBytes | Set-Content $UpdaterScript -Force
 
@@ -359,7 +354,7 @@ Function Sync-Ets2ModRepo {
         Write-Host -NoNewline -ForegroundColor $VersionColor $CurrentMod.VersionStr.PadRight($E_LongestVersion)
         [Byte]$XPos = $Host.UI.RawUI.CursorPosition.X
 
-        If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -ne 1) {
+        If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -eq 2) {
             Write-Host -NoNewline ('Validating...', $Status)[[Bool]$Repair]
             If (!(Test-ModHash $CurrentMod.FileName $CurrentMod.Hash)) {
                 If ($Repair -eq 0) {
@@ -480,3 +475,4 @@ Function Sync-Ets2ModRepo {
 }
 If (!$Updated) {Switch (Sync-Ets2ModRepo) {{$Null -ne $_} {& "$PSScriptRoot\Update.ps1" @($_)}}}
 Else {[Void](Sync-Ets2ModRepo -Updated $Updated)}
+
