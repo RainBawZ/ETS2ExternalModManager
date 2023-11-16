@@ -1,0 +1,10 @@
+{
+    "sample_mod": {
+        "Version": "1.0",
+        "Title": "Sample Mod",
+        "Name": "sample_mod",
+        "FileName": "sample_mod.scs",
+        "VersionStr": "1.0",
+        "Hash": "7EB719DA86044ACB0F3BE3301AE7C70D1A6037CE"
+    }
+}
