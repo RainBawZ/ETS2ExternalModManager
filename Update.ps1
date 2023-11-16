@@ -110,7 +110,7 @@ Function Sync-Ets2ModRepo {
             [String]$ContentType
         )
 
-        [Uri]$Uri = "http://tams.pizza/ets2repo/$File"
+        [Uri]$Uri = "https://your.domain/repo/$File"
 
         If ($PSCmdlet.ParameterSetName -eq 'IWR') {
             [Hashtable]$IWRSplat = @{
