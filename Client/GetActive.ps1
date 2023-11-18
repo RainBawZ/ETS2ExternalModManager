@@ -6,7 +6,7 @@ Function Get-ModRepoFile {
         [String]$ContentType
     )
 
-    [Uri]$Uri = "http://tams.pizza/ets2repo/$File"
+    [Uri]$Uri = "https://your.domain/repo/$File"
 
     [Hashtable]$IWRSplat = @{
         Uri             = $Uri
