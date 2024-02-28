@@ -1,4 +1,4 @@
-#STR_version=3.4.0;
+#STR_version=3.4.1;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
@@ -733,29 +733,28 @@ Function Sync-Ets2ModRepo {
     }
 
     Function Show-Menu {
+        [CmdletBinding()]
+
+        Param ([Switch]$Saved)
 
         Write-Host "`n    $($G__ScriptDetails['Title'])`n"
         Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
         Write-Host -NoNewline "`n      Active profile: "
         Write-Host -ForegroundColor Green $G__ActiveProfileName
-
-        [String[]]$MenuText   = @(
-            "`n",
-            '      [0]      Change profile',
-            "      [1]      Launch $G__GameName upon completion"
-            '      [2]      Delete inactive mods (Frees up space)',
-            '      [3]      Verify game file integrity (Force Workshop mod updates)',
-            '      [4]      Skip profile configuration',
-            '      [5]      Save current choices'
-            "`n",
-            '      [ESC]    Exit',
-            "`n",
-            "      [SPACE]  Profile configuration ONLY",
-            "      [ENTER]  Run updater$(('', ' + verify integrity')[$G__ValidateInstall])$(('', ' + delete inactive mods')[$G__DeleteDisabled])$(('', ' + skip profile config')[$G__NoProfileConfig])$(('', " + launch $G__GameNameShort")[$G__StartGame])",
-            "      $(('', 'WARNING: Deleted mods must be reaquired if reactivated in the future.')[$G__DeleteDisabled])"
-        )
-
-        Write-HostFancy $MenuText 0
+        Write-Host "`n"
+        Write-HostFancy '      [0]      Change profile'
+        Write-HostFancy "      [1]      Launch $G__GameName upon completion"
+        Write-HostFancy '      [2]      Delete inactive mods (Frees up space)'
+        Write-HostFancy '      [3]      Verify game file integrity (Force Workshop mod updates)'
+        Write-HostFancy '      [4]      Skip profile configuration'
+        Write-HostFancy ''
+        Write-HostFancy "      [5]      Save current choices $(('', '[SAVED]')[$Saved.IsPresent])" -ForegroundColor ([Console]::ForegroundColor, 'Green')[$Saved.IsPresent]
+        Write-HostFancy ''
+        Write-HostFancy '      [ESC]    Exit'
+        Write-HostFancy ''
+        Write-HostFancy '      [SPACE]  Profile configuration ONLY'
+        Write-HostFancy "      [ENTER]  Run updater$(('', ' + verify integrity')[$G__ValidateInstall])$(('', ' + delete inactive mods')[$G__DeleteDisabled])$(('', ' + skip profile config')[$G__NoProfileConfig])$(('', " + launch $G__GameNameShort")[$G__StartGame])"
+        Write-HostFancy "      $(('', 'WARNING: Deleted mods must be reaquired if reactivated in the future.')[$G__DeleteDisabled])" -ForegroundColor Yellow
 
         While ($True) {
             [Int]$Choice = Read-KeyPress -Clear
@@ -771,11 +770,11 @@ Function Sync-Ets2ModRepo {
                 27 {Return 'Exit'} # [ESC]
                 32 {Return '$G__NoUpdate = $True; Update-ProtectedVars; Break'} # [SPACE]
                 48 {If (!(Select-Profile -AllowEsc)) {Return 'Continue'} Else {Return 'Unprotect-Variables; $GLOBAL:G__ScriptRestart = $True; Return "Menu"'}} # [0]
-                49 {Return '$G__StartGame = !$G__StartGame; Update-ProtectedVars; Continue'}                # [1]
-                50 {Return '$G__DeleteDisabled = !$G__DeleteDisabled; Update-ProtectedVars; Continue'}      # [2]
-                51 {Return '$G__ValidateInstall = !$G__ValidateInstall; Update-ProtectedVars; Continue'}    # [3]
-                52 {Return '$G__NoProfileConfig = !$G__NoProfileConfig; Update-ProtectedVars; Continue'}    # [4]
-                53 {Return 'Write-AllEmbeddedValues; Continue'}                                             # [5]
+                49 {Return '$G__StartGame = !$G__StartGame; Update-ProtectedVars; $Save = $False; Continue'}                # [1]
+                50 {Return '$G__DeleteDisabled = !$G__DeleteDisabled; Update-ProtectedVars; $Save = $False; Continue'}      # [2]
+                51 {Return '$G__ValidateInstall = !$G__ValidateInstall; Update-ProtectedVars; $Save = $False; Continue'}    # [3]
+                52 {Return '$G__NoProfileConfig = !$G__NoProfileConfig; Update-ProtectedVars; $Save = $False; Continue'}    # [4]
+                53 {Return 'Write-AllEmbeddedValues; $Save = $True; Continue'}                                              # [5]
                 Default {Break} # Invalid choice
             }
             [Console]::Beep(1000, 150)
@@ -806,7 +805,7 @@ Function Sync-Ets2ModRepo {
 
         Param (
             [Parameter(Position = 0)][String[]]$String = @(''),
-            [Parameter(Position = 1)][UInt16]$Speed    = 50,
+            [Parameter(Position = 1)][UInt16]$Speed    = 0,
             [ConsoleColor]$ForegroundColor             = [Console]::ForegroundColor,
             [ConsoleColor]$BackgroundColor             = [Console]::BackgroundColor
         )
@@ -930,7 +929,7 @@ Function Sync-Ets2ModRepo {
         DeleteDisabled  = 4
         NoProfileConfig = 5
     }
-    [String]$G__RepositoryURL  = 'http://your.domain/repository'
+    [String]$G__RepositoryURL  = 'http://your.domain/repo'
     [String]$G__ScriptPath     = $PSCommandPath
     [UInt16]$G__WndWidth       = 120
     [UInt16]$G__WndHeight      = 50
@@ -988,6 +987,10 @@ Function Sync-Ets2ModRepo {
     }
 
     [String[]]$G__UpdateNotes = @(
+        '3.4.1:',
+        '- Improved visual feedback when saving settings',
+        ' ',
+        '3.4.0:',
         '- Added ability to save and auto-apply updater settings in future runs',
         '- Fixed issues with overlapping text in the menu interface',
         '- Fixed issue with locating Steam Workshop directory on 32-bit systems',
@@ -1054,9 +1057,10 @@ Function Sync-Ets2ModRepo {
     Remove-UnprotectedVars
 
     Show-LandingScreen
+    [Bool]$Save = $False
     While ($True) {
         Clear-HostFancy 19 0 0
-        If ((Invoke-Expression (Show-Menu)) -eq 'Menu') {Return ''}
+        If ((Invoke-Expression (Show-Menu -Saved:$Save)) -eq 'Menu') {Return ''}
     }
 
     Clear-Host
