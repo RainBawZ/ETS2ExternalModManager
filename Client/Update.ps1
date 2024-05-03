@@ -1,9 +1,11 @@
-#STR_version=3.4.1;
+#STR_version=3.5.0.1;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
 #NUM_purge=0;
 #NUM_noconfig=0;
+#STR_config=default.cfg;
+#NUM_editor=0;
 
 #***GAME_PROFILE_PLACEHOLDER***
 
@@ -43,22 +45,22 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory, Position = 2)][Double]$Max
         )
 
-        If ($Min -gt $Max -Or $Max -lt $Min) {Throw 'Invalid range'}
+        If ($Max - $Min -lt 0)  {Throw 'Invalid range'}
 
-        If ($G__ClampAvailable) {Return [Math]::Clamp($Value, $Min, $Max)}
-        Else                    {Return $(If ($Value -lt $Min) {$Min} ElseIf ($Value -gt $Max) {$Max} Else {$Value})}
+        If ($G__ClampAvailable) {Return [Math]::Clamp($Value, $Min, $Max)} Else {Return ($Value, $Min, $Max)[$Value -lt $Min + ($Value -gt $Max * 2)]}
+
     }
 
     Function Write-HostX {
         [CmdletBinding()]
 
         Param (
-            [Parameter(Mandatory, Position = 0)][ValidateScript({$_ -ge 0 -And $_ -le $Host.UI.RawUI.BufferSize.Width})][UInt16]$X,
+            [Parameter(Mandatory, Position = 0)][ValidateScript({$_ -ge 0 -And $_ -le [Console]::BufferWidth})][UInt16]$X,
             [Parameter(Mandatory, Position = 1, ValueFromRemainingArguments)][String]$InputString,
             [ConsoleColor]$Color, [Switch]$Newline
         )
 
-        [UInt16]$BufferWidth = $Host.UI.RawUI.BufferSize.Width
+        [UInt16]$BufferWidth = [Console]::BufferWidth
         [UInt16]$InputLimit  = $BufferWidth - $X
 
         # Prevent screen buffer overflows (line wrapping breaks the layout)
@@ -74,7 +76,7 @@ Function Sync-Ets2ModRepo {
         }
         If ($Color) {$WHSplat['ForegroundColor'] = $Color}
 
-        If ($G__HostCompatible) {[Console]::SetCursorPosition($X, $Host.UI.RawUI.CursorPosition.Y)}
+        [Console]::SetCursorPosition($X, [Console]::CursorTop)
 
         Write-Host @WHSplat
     }
@@ -85,7 +87,7 @@ Function Sync-Ets2ModRepo {
         Param ([Parameter(Position = 0)][String]$Prompt)
 
         [String]$UserInput = If ($Prompt) {Read-Host $Prompt} Else {Read-Host}
-        If ($G__HostCompatible) {[Console]::CursorVisible = $False}
+        [Console]::CursorVisible = $False
         Return $UserInput
     }
 
@@ -138,15 +140,15 @@ Function Sync-Ets2ModRepo {
         If ($Unit) {
             [String]$UnitSymbol    = $Unit.ToLower().Replace('b', 'B').Replace('m', 'M').Replace('g', 'G')
             [Double]$ConvertedRate = Switch ($UnitSymbol) {
-                {$_ -eq 'B/s'}  {$BytesPerSecond}
-                {$_ -eq 'kB/s'} {$BytesPerSecond / 1kB}
-                {$_ -eq 'MB/s'} {$BytesPerSecond / 1MB}
-                {$_ -eq 'GB/s'} {$BytesPerSecond / 1GB}
+                'B/s'  {$BytesPerSecond}
+                'kB/s' {$BytesPerSecond / 1kB}
+                'MB/s' {$BytesPerSecond / 1MB}
+                'GB/s' {$BytesPerSecond / 1GB}
             }
         }
         Else {[Double]$ConvertedRate, [String]$UnitSymbol = ((($BytesPerSecond / 1MB), 'MB/s'), (($BytesPerSecond / 1kB), 'kB/s'))[$BytesPerSecond -lt 1MB]}
 
-        Return [String](([Math]::Round($ConvertedRate, 2), [Math]::Round($ConvertedRate))[$UnitSymbol -eq 'B/s']) + " $UnitSymbol"
+        Return "$(([Math]::Round($ConvertedRate, 2), [Math]::Round($ConvertedRate))[$UnitSymbol -eq 'B/s']) $UnitSymbol"
     }
 
     Function Get-ModRepoFile {
@@ -157,25 +159,26 @@ Function Sync-Ets2ModRepo {
             [Parameter(ParameterSetName = 'NoIWR', Position = 1)][Byte]$X,
             [Parameter(ParameterSetName = 'NoIWR', Position = 2)][String]$State,
             [Parameter(Mandatory, ParameterSetName = 'IWR')][Switch]$UseIWR,
-            [Parameter(ParameterSetName = 'IWR')][Switch]$Save
+            [Parameter(ParameterSetName = 'IWR')][Switch]$Save,
+            [UInt16]$Timeout = 15000
         )
 
         [Uri]$Uri = "$G__RepositoryURL/$File"
 
         If ($PSCmdlet.ParameterSetName -eq 'IWR') {
-            [Hashtable]$IWRSplat = @{Uri = $Uri}
+            [Hashtable]$IWRSplat = @{Uri = $Uri; TimeoutSec = $Timeout}
             If ($PSVersionTable.PSVersion.Major -lt 6) {$IWRSplat['UseBasicParsing'] = $True}
             If ($Save.IsPresent)                       {$IWRSplat['OutFile']         = $File}
             Return Invoke-WebRequest @IWRSplat
         }
 
-        [Net.HttpWebRequest]$HeaderRequest   = [Net.WebRequest]::CreateHttp($Uri)
-        $HeaderRequest.Method                = 'HEAD'
-        $HeaderRequest.KeepAlive             = $False
-        $HeaderRequest.Timeout               = 15000
+        [Net.HttpWebRequest]$HeaderRequest = [Net.WebRequest]::CreateHttp($Uri)
+        $HeaderRequest.Method              = 'HEAD'
+        $HeaderRequest.KeepAlive           = $False
+        $HeaderRequest.Timeout             = $Timeout
 
         [Net.HttpWebRequest]$DownloadRequest = [Net.WebRequest]::CreateHttp($Uri)
-        $DownloadRequest.Timeout             = 15000
+        $DownloadRequest.Timeout             = $Timeout
         $DownloadRequest.Proxy               = [Net.GlobalProxySelection]::GetEmptyWebProxy()
 
         [Net.HttpWebResponse]$Header = $HeaderRequest.GetResponse()
@@ -213,7 +216,7 @@ Function Sync-Ets2ModRepo {
                 $IntervalStart = Get-Date
             }
 
-            Write-HostX $X -Color Green ("$State " + ("$ConvertedBytes".PadLeft(5)) + "/$ConvertedDownload ($TransferRate)")
+            Write-HostX $X -Color Green ("$State " + "$ConvertedBytes".PadLeft(5) + "/$ConvertedDownload ($TransferRate)")
         }
 
         $Download.Dispose()
@@ -303,15 +306,12 @@ Function Sync-Ets2ModRepo {
             If ($BackgroundColor) {$PromptSplat['BackgroundColor'] = $BackgroundColor}
             Write-Host @PromptSplat
         }
-        If ($G__HostCompatible) {
-            [Void]$Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown')
-            If ($Clear.IsPresent) {
-                [Console]::SetCursorPosition(0, $Host.UI.RawUI.CursorPosition.Y)
-                Write-Host -NoNewline (' ' * $Prompt.Length)
-                [Console]::SetCursorPosition(0, $Host.UI.RawUI.CursorPosition.Y)
-            }
+        [Void]$Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown')
+        If ($Clear.IsPresent) {
+            [Console]::SetCursorPosition(0, [Console]::CursorTop)
+            Write-Host -NoNewline (' ' * $Prompt.Length)
+            [Console]::SetCursorPosition(0, [Console]::CursorTop)
         }
-        Else {[Void](Read-HostX)}
     }
 
     Function Read-KeyPress {
@@ -333,15 +333,12 @@ Function Sync-Ets2ModRepo {
             If ($BackgroundColor) {$PromptSplat['BackgroundColor'] = $BackgroundColor}
             Write-Host @PromptSplat
         }
-        If ($G__HostCompatible) {
-            [String]$KeyPress = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
-            If ($Clear) {
-                [Console]::SetCursorPosition(0, $Host.UI.RawUI.CursorPosition.Y)
-                Write-Host -NoNewline (' ' * $Prompt.Length)
-                [Console]::SetCursorPosition(0, $Host.UI.RawUI.CursorPosition.Y)
-            }
+        [String]$KeyPress = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
+        If ($Clear.IsPresent) {
+            [Console]::SetCursorPosition(0, [Console]::CursorTop)
+            Write-Host -NoNewline (' ' * $Prompt.Length)
+            [Console]::SetCursorPosition(0, [Console]::CursorTop)
         }
-        Else {[String]$KeyPress = Read-HostX}
         Return $KeyPress
     }
 
@@ -356,9 +353,9 @@ Function Sync-Ets2ModRepo {
 
         [__ComObject]$WShell = New-Object -COM WScript.Shell
         [UInt32]$TargetPID   = Switch ($PSCmdlet.ParameterSetName) {
-            'Self'  {$PID}
-            'Name'  {(Get-Process $Name)[0].Id}
-            'PID'   {$ID}
+            'Self' {$PID}
+            'Name' {(Get-Process $Name)[0].Id}
+            'PID'  {$ID}
         }
         [Void]$WShell.AppActivate($TargetPID)
     }
@@ -393,10 +390,11 @@ Function Sync-Ets2ModRepo {
     Function ConvertTo-PlainTextProfileUnit {
         [CmdletBinding()]
 
-        Param ([String]$File = $G__ProfileUnit)
+        Param ([String]$File = $G__ProfileUnit, [String]$OutFile = $G__TempProfileUnit, [Switch]$OnFile)
 
         [String]$UnitDecoder   = Get-GameUnitDecoder
-        [Object]$DecoderResult = Invoke-Expression "& '$UnitDecoder' --on_file -i '$G__ProfileUnit'"
+        [String]$DecodeCommand = "& '$UnitDecoder'" + (" '$File' '$OutFile'", " --on_file -i '$File'")[$OnFile.IsPresent]
+        [Object]$DecoderResult = Invoke-Expression $DecodeCommand
 
         Switch ($LASTEXITCODE) {
             0       {Break}
@@ -444,7 +442,7 @@ Function Sync-Ets2ModRepo {
     Function Get-ProfileUnitFormat {
         [CmdletBinding()]
 
-        Param ([String]$Target = $G__ProfileUnit)
+        Param ([String]$Target = $G__TempProfileUnit)
 
         [Byte[]]$UnitData = [IO.File]::ReadAllBytes($Target)
 
@@ -494,21 +492,22 @@ Function Sync-Ets2ModRepo {
     Function Read-PlainTextProfileUnit {
         [CmdletBinding()]
 
-        Param ([ValidateSet('Mods', 'Data', 'All')][String]$Return = 'All', [Switch]$Raw)
+        Param ([ValidateSet('Mods', 'Data', 'All')][String]$Return = 'All', [Switch]$Raw, [Switch]$Direct)
 
         [Bool]$Parse        = $False
         [String[]]$UnitMods = @()
         [String[]]$UnitData = @()
+
+        [String]$File = ($G__TempProfileUnit, $G__ProfileUnit)[$Direct.IsPresent]
     
-        ForEach ($Line in Get-Content $G__ProfileUnit -Encoding UTF8) {
+        ForEach ($Line in Get-Content $File -Encoding UTF8) {
             If ($Parse -And $Line -Match '^ customization: \d+$') {
                 $Parse     = $False
                 $UnitData += '<MODLIST_INSERTION_POINT>'
             }
             ElseIf ($Line -Match '^ active_mods: \d+$') {$Parse = $True}
 
-            If ($Parse) {$UnitMods += $Line}
-            Else        {$UnitData += $Line}
+            If ($Parse) {$UnitMods += $Line} Else {$UnitData += $Line}
         }
         If ($Raw.IsPresent) {
             [String]$UnitMods = $UnitMods -Join "`n"
@@ -528,39 +527,37 @@ Function Sync-Ets2ModRepo {
             Return
         }
 
-        Write-Host -NoNewline (''.PadRight(4) + 'Downloading configuration...'.PadRight(35))
-        [String]$ActiveMods      = (Get-ModRepoFile _active.txt -UseIWR).Content
-        [UInt16]$ActiveModsCount = (($ActiveMods -Split "`n", 2)[0] -Split ':', 2)[-1].Trim()
-        Write-Host -ForegroundColor Green "OK - $ActiveModsCount active mods"
+        Write-Host -ForegroundColor Green (''.PadRight(4) + "$G__ModConfiguration - $G__ActiveModsCount active mods")
 
-        Write-Host -NoNewline (''.PadRight(4) + 'Creating profile backup...'.PadRight(35))
-        [String]$Backup = Backup-ProfileUnit
-        Write-Host -ForegroundColor Green ('OK - ' + ([IO.Path]::GetFileName($Backup)))
+        [String]$ProfileFormat = Get-ProfileUnitFormat $ProfileUnit
 
-        If ((Get-ProfileUnitFormat) -ne 'Text') {
+        If ($ProfileFormat -ne 'Text') {
             Write-Host -NoNewline (''.PadRight(4) + 'Decoding profile...'.PadRight(35))
             ConvertTo-PlainTextProfileUnit
             Write-Host -ForegroundColor Green 'OK'
         }
-        
-        Write-Host -NoNewline (''.PadRight(4) + 'Applying configuration...'.PadRight(35))
 
-        [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All
+        [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All -Direct:($ProfileFormat -eq 'Text')
 
         [String]$RawProfileMods   = $ProfileMods -Join "`n"
         [UInt16]$ProfileModsCount = ($ProfileMods[0] -Split ':', 2)[-1].Trim()
-        [Hashtable]$NewConfig     = Get-ModData $ActiveMods
 
-        If ($RawProfileMods -cne $ActiveMods) {
-            $ProfileData -Join "`n" -Replace '<MODLIST_INSERTION_POINT>', $ActiveMods | Set-Content $ProfileUnit @G__SCGlobal
-            Write-Host -ForegroundColor Green "OK - $ProfileModsCount > $ActiveModsCount"
+        If ($RawProfileMods -cne $G__ModConfigText) {
+            Write-Host -NoNewline (''.PadRight(4) + 'Creating profile backup...'.PadRight(35))
+            [String]$Backup = Backup-ProfileUnit
+            Write-Host -ForegroundColor Green ('OK - ' + ([IO.Path]::GetFileName($Backup)))
+
+            Write-Host -NoNewline (''.PadRight(4) + 'Applying configuration...'.PadRight(35))
+            If ($ProfileFormat -ne 'Text') {ConvertTo-PlainTextProfileUnit -OnFile}
+            $ProfileData -Join "`n" -Replace '<MODLIST_INSERTION_POINT>', $G__ModConfigText | Set-Content $ProfileUnit @G__SCGlobal
+            Write-Host -ForegroundColor Green "OK - $ProfileModsCount > $G__ActiveModsCount"
         }
-        Else {Write-Host -ForegroundColor Green 'Already applied'}
+        Else {Write-Host -ForegroundColor Green '    Already applied'}
 
-        [String[]]$MissingWorkshopMods = Foreach ($Key in $NewConfig.Keys | Where-Object {$NewConfig[$_].Type -eq 'mod_workshop_package'}) {
-            [Hashtable]$Current = $NewConfig[$Key]
+        [String[]]$MissingWorkshopMods = ForEach ($Key in $G__ModConfigData.Keys | Where-Object {$G__ModConfigData[$_].Type -eq 'mod_workshop_package'}) {
+            [Hashtable]$Current = $G__ModConfigData[$Key]
             If (!(Test-WorkshopModInstalled $Current.Source)) {
-                Write-Host -ForegroundColor Yellow (''.PadRight(4) + "MISSING WORKSHOP SUBSCRIPTION: " + $Current.Name)
+                Write-Host -ForegroundColor Yellow (''.PadRight(4) + 'MISSING WORKSHOP SUBSCRIPTION: ' + $Current.Name)
                 $Current.SourceName
             }
         }
@@ -580,9 +577,46 @@ Function Sync-Ets2ModRepo {
         [String]$Name       = ('profile_' + (Get-Date -Format yy-MM-dd_HHmmss))
         [String]$BackupFile = "$G__ProfilePath\$Name.bak"
 
-        Copy-Item $G__ProfileUnit $BackupFile
+        Copy-Item $G__ProfileUnit $BackupFile -ErrorAction Stop
 
         Return $BackupFile
+    }
+
+    Function Export-ProfileConfiguration {
+        # FIXME: This function is incomplete and will be implemented in a future version
+
+        Do {[String]$OutFile = Read-HostX ' Config name'} Until (![IO.File]::Exists("$G__GameRootDirectory\$OutFile.cfg") -And $OutFile -Match '^(?!default$)[A-Z0-9_\-\. ]+$')
+        $OutFile = "$G__GameRootDirectory\$OutFile.cfg"
+
+        [String]$ProfileFormat = Get-ProfileUnitFormat
+
+        If ($ProfileFormat -ne 'Text') {ConvertTo-PlainTextProfileUnit}
+
+        [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All -Direct:($ProfileFormat -eq 'Text')
+
+        $ProfileMods -Join "`n" | Out-File $OutFile -Encoding UTF8
+
+        Clear-Host
+    }
+
+    Function Import-ProfileConfiguration {
+        # FIXME: This function is incomplete and will be implemented in a future version
+        Return
+
+        [CmdletBinding()]
+
+        [Management.Automation.Host.Coordinates]$Pos = $Host.UI.RawUI.CursorPosition
+        Do {[String]$InFile = Read-HostX 'Config path'} Until ([IO.File]::Exists($InFile) -And [IO.Path]::GetExtension($InFile) -eq '.cfg')
+
+        [String]$ProfileFormat = Get-ProfileUnitFormat
+
+        If ($ProfileFormat -ne 'Text') {ConvertTo-PlainTextProfileUnit}
+
+        [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All -Direct:($ProfileFormat -eq 'Text')
+
+        $ProfileMods -Join "`n" | Set-Content $G__ProfileUnit @G__SCGlobal
+
+        Clear-Host
     }
 
     Function Select-Profile {
@@ -594,9 +628,9 @@ Function Sync-Ets2ModRepo {
 
         Clear-Host
         Write-Host ' SELECT PROFILE'
-        Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+        Write-Host ($G__UILine * [Console]::BufferWidth)
 
-        If (!$AllProfiles) {Throw "No profiles detected! Disable 'Use Steam Cloud' for the profile(s) you want to use."}
+        If (!$AllProfiles) {Throw 'No profiles detected! Disable ''Use Steam Cloud'' for the profile(s) you want to use.'}
 
         If ($AllProfiles.Count -eq 1) {
             Set-ActiveProfile $AllProfiles[0]
@@ -613,21 +647,21 @@ Function Sync-Ets2ModRepo {
         [Management.Automation.Host.Coordinates]$StartPos = $Host.UI.RawUI.CursorPosition
 
         Do {
-            If ($G__HostCompatible) {[Console]::SetCursorPosition($StartPos.X, $StartPos.Y)}
+            $Host.UI.RawUI.CursorPosition = $StartPos
 
             [Byte]$Iteration = 0
 
             ForEach ($Directory in $AllProfiles) {
 
-                [String]$Name      = Convert-ProfileFolderName $Directory
-                [Bool]$IsSelected  = $Iteration -eq $Selected
+                [String]$Name     = Convert-ProfileFolderName $Directory
+                [Bool]$IsSelected = $Iteration -eq $Selected
 
                 Write-Host -NoNewline ' '
                 Write-HostX 0 -Color ("DarkGray", "Green")[$IsSelected] (' ' + ('   ', '>> ')[$IsSelected] + $Directory.PadRight($LongestDir) + "$Name ") -Newline
                 $Iteration++
             }
             Write-Host -NoNewline "`n * Use the "
-            Write-Host -NoNewline -ForegroundColor Cyan "[UP]"
+            Write-Host -NoNewline -ForegroundColor Cyan '[UP]'
             Write-Host -NoNewline ' and '
             Write-Host -NoNewline -ForegroundColor Cyan '[DOWN]'
             Write-Host -NoNewline " keys to select an $G__GameNameShort profile.`n   Press "
@@ -640,14 +674,16 @@ Function Sync-Ets2ModRepo {
             }
             Else {Write-Host '.'}
 
+            [String]$SelectedProfile = $AllProfiles[$Selected]
+
             Do {
                 [Bool]$UpdateSelection = $False
                 Switch (Read-KeyPress -Clear) {
                     13 { # [ENTER]
                         Clear-Host
-                        If ($AllProfiles[$Selected] -ne $PreviousProfile) {
-                            Set-ActiveProfile $AllProfiles[$Selected]
-                            Return $AllProfiles[$Selected]
+                        If ($SelectedProfile -ne $PreviousProfile) {
+                            Set-ActiveProfile $SelectedProfile
+                            Return $SelectedProfile
                         }
                         Return
                     }
@@ -724,7 +760,7 @@ Function Sync-Ets2ModRepo {
 
         Param ([String]$Action)
 
-        Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+        Write-Host ($G__UILine * [Console]::BufferWidth)
         Write-Host "`n    $($G__ScriptDetails['Title'])`n"
         Write-Host "    $($G__ScriptDetails['Version']), Updated $($G__ScriptDetails['VersionDate'])"
         Write-Host "    $($G__ScriptDetails['Copyright']) - $($G__ScriptDetails['Author'])`n"
@@ -732,49 +768,101 @@ Function Sync-Ets2ModRepo {
         Start-Sleep 2
     }
 
-    Function Show-Menu {
+    Function Invoke-Menu {
         [CmdletBinding()]
 
         Param ([Switch]$Saved)
 
-        Write-Host "`n    $($G__ScriptDetails['Title'])`n"
-        Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
-        Write-Host -NoNewline "`n      Active profile: "
-        Write-Host -ForegroundColor Green $G__ActiveProfileName
-        Write-Host "`n"
-        Write-HostFancy '      [0]      Change profile'
-        Write-HostFancy "      [1]      Launch $G__GameName upon completion"
-        Write-HostFancy '      [2]      Delete inactive mods (Frees up space)'
-        Write-HostFancy '      [3]      Verify game file integrity (Force Workshop mod updates)'
-        Write-HostFancy '      [4]      Skip profile configuration'
-        Write-HostFancy ''
-        Write-HostFancy "      [5]      Save current choices $(('', '[SAVED]')[$Saved.IsPresent])" -ForegroundColor ([Console]::ForegroundColor, 'Green')[$Saved.IsPresent]
-        Write-HostFancy ''
-        Write-HostFancy '      [ESC]    Exit'
-        Write-HostFancy ''
-        Write-HostFancy '      [SPACE]  Profile configuration ONLY'
-        Write-HostFancy "      [ENTER]  Run updater$(('', ' + verify integrity')[$G__ValidateInstall])$(('', ' + delete inactive mods')[$G__DeleteDisabled])$(('', ' + skip profile config')[$G__NoProfileConfig])$(('', " + launch $G__GameNameShort")[$G__StartGame])"
-        Write-HostFancy "      $(('', 'WARNING: Deleted mods must be reaquired if reactivated in the future.')[$G__DeleteDisabled])" -ForegroundColor Yellow
+        [String]$SetAndContinue = '; Update-ProtectedVars; $Save = $False; Continue'
+        [String]$RunText        = 'Run updater'
+        If ($G__ValidateInstall) {$RunText += ' + verify integrity'}
+        If ($G__DeleteDisabled)  {$RunText += ' + delete inactive mods'}
+        If ($G__NoProfileConfig) {$RunText += ' + skip profile config'}
+        If ($G__StartGame) {
+            $RunText += " + launch $G__GameNameShort"
+            If ($G__StartSaveEditor) {$RunText += ' + launch TS SE Tool'}
+        }
+
+        [Byte]$ActiveDataPadding = ("Active $G__GameNameShort profile: ", 'Active mod config: ' | Sort-Object Length)[-1].Length
+
+        [Console]::SetCursorPosition(0, 0)
+
+        Write-Host "`n    $($G__ScriptDetails['Title'])   $G__ScriptVersion`n"
+
+        Write-Host ($G__UILine * [Console]::BufferWidth)
+
+        Write-Host -NoNewline ("`n      " + "Active $G__GameNameShort profile: ".PadRight($ActiveDataPadding))
+        Write-HostFancy -ForegroundColor Green $G__ActiveProfileName
+        Write-Host -NoNewline ('      ' + 'Active mod config: '.PadRight($ActiveDataPadding))
+        Write-HostFancy -ForegroundColor Green $G__ModConfiguration
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [1]      Launch $G__GameName upon completion`n"
+        Write-HostFancy "      [2]      Launch TS SE Tool with $G__GameName"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [3]      Delete inactive mods (Frees up space)`n"
+        Write-HostFancy "      [4]      Verify game file integrity (Force Workshop mod updates)`n"
+        Write-HostFancy "      [5]      Skip profile configuration"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [6]      Save current choices $(('', '[SAVED]')[$Saved.IsPresent])" -ForegroundColor ([Console]::ForegroundColor, 'Green')[$Saved.IsPresent]
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [7]      Export current profile configuration`n"
+        Write-HostFancy "      [8]      Import profile configuration"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [9]      Change mod configuration`n"
+        Write-HostFancy "      [0]      Change profile"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [ESC]    Exit"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      [SPACE]  Profile configuration ONLY`n"
+        Write-HostFancy "      [ENTER]  $RunText"
+
+        Write-HostFancy "`n    $($G__UILine * 75)`n"
+
+        Write-HostFancy "      $(('', "WARNING: Deleted mods must be reaquired if reactivated in the future.`n")[$G__DeleteDisabled])" -ForegroundColor Yellow
 
         While ($True) {
             [Int]$Choice = Read-KeyPress -Clear
-            # 0 - Execute
-            # 1 - Exit
-            # 2 - Update profile
-            # 3 - Execution option (G__DeleteDisabled)
-            # 4 - Restart menu
-            # 5 - Execution option (Steam validation)
-            # 6 - Save options
+            # 13 - Execute
+            # 27 - Exit
+            # 32 - No update
+            # 48 - Update profile
+            # 49 - Start game
+            # 50 - Start save editor
+            # 51 - Delete inactive mods
+            # 52 - Validate install
+            # 53 - Skip profile config
+            # 54 - Save options
+            # 55 - Export profile configuration
+            # 56 - Import profile configuration
+            # 57 - Change mod configuration
             Switch ($Choice) {
                 13 {Return 'Break'} # [ENTER]
                 27 {Return 'Exit'} # [ESC]
                 32 {Return '$G__NoUpdate = $True; Update-ProtectedVars; Break'} # [SPACE]
                 48 {If (!(Select-Profile -AllowEsc)) {Return 'Continue'} Else {Return 'Unprotect-Variables; $GLOBAL:G__ScriptRestart = $True; Return "Menu"'}} # [0]
-                49 {Return '$G__StartGame = !$G__StartGame; Update-ProtectedVars; $Save = $False; Continue'}                # [1]
-                50 {Return '$G__DeleteDisabled = !$G__DeleteDisabled; Update-ProtectedVars; $Save = $False; Continue'}      # [2]
-                51 {Return '$G__ValidateInstall = !$G__ValidateInstall; Update-ProtectedVars; $Save = $False; Continue'}    # [3]
-                52 {Return '$G__NoProfileConfig = !$G__NoProfileConfig; Update-ProtectedVars; $Save = $False; Continue'}    # [4]
-                53 {Return 'Write-AllEmbeddedValues; $Save = $True; Continue'}                                              # [5]
+                49 {Return '$G__StartGame = !$G__StartGame' + $SetAndContinue}                     # [1]
+                50 {Return '$G__StartSaveEditor = $G__StartGame -And !$G__StartSaveEditor' + $SetAndContinue} # [2]
+                51 {Return '$G__DeleteDisabled = !$G__DeleteDisabled' + $SetAndContinue}           # [3]
+                52 {Return '$G__ValidateInstall = !$G__ValidateInstall' + $SetAndContinue}         # [4]
+                53 {Return '$G__NoProfileConfig = !$G__NoProfileConfig' + $SetAndContinue}         # [5]
+                54 {Return 'Write-AllEmbeddedValues; $Save = $True; Continue'; Write-AllEmbeddedValues} # [6]
+                55 {Return 'Export-ProfileConfiguration; Continue'; Export-ProfileConfiguration}   # [7]
+                56 {Return 'Import-ProfileConfiguration; Continue'; Import-ProfileConfiguration}   # [8]
+                57 {Return '$G__ModConfiguration = Select-ProfileConfiguration; Get-' + $SetAndContinue; Select-ProfileConfiguration} # [9]
                 Default {Break} # Invalid choice
             }
             [Console]::Beep(1000, 150)
@@ -817,7 +905,7 @@ Function Sync-Ets2ModRepo {
         }
         
         ForEach ($Line in $Text) {
-            Write-Host @Splat ($Line + ' ' * ($Host.UI.RawUI.BufferSize.Width - $Line.Length))
+            Write-Host @Splat ($Line + ' ' * ([Console]::BufferWidth - $Line.Length - [Console]::CursorLeft))
             Start-Sleep -Milliseconds ($Speed, 0)[[String]::IsNullOrWhiteSpace($Line)]
         }
     }
@@ -831,7 +919,7 @@ Function Sync-Ets2ModRepo {
         )
 
         [Hashtable]$Splat = @{
-            Object          = ' ' * $Host.UI.RawUI.BufferSize.Width
+            Object          = ' ' * [Console]::BufferWidth
             ForegroundColor = [Console]::ForegroundColor
             BackgroundColor = [Console]::BackgroundColor
         }
@@ -854,7 +942,7 @@ Function Sync-Ets2ModRepo {
             [String[]]$CustomData
         )
 
-        [String[]]$ScriptData = If ($CustomData) {$CustomData} Else {Get-Content $G__ScriptPath -Encoding UTF8}
+        [String[]]$ScriptData = If ($CustomData) {$CustomData} Else {Get-Content @G__GCSelfGlobal}
 
         [String]$Info,   [String]$RawValue = $ScriptData[$Index].Substring(0, $ScriptData[$Index].IndexOf(';')).Substring(1) -Split '=', 2
         [String]$Format, [String]$Name     = $Info -Split '_', 2
@@ -893,7 +981,7 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory)][String]$Value
         )
 
-        [String[]]$ScriptData = Get-Content $G__ScriptPath -Encoding UTF8
+        [String[]]$ScriptData = Get-Content @G__GCSelfGlobal
         $ScriptData[$Index]   = New-EmbeddedValue $ScriptData[$Index] $Value
 
         $ScriptData -Join "`n" | Set-Content $G__ScriptPath @G__SCGlobal
@@ -902,7 +990,7 @@ Function Sync-Ets2ModRepo {
     Function Write-AllEmbeddedValues {
         [CmdletBinding()]
 
-        [String[]]$ScriptData = Get-Content $G__ScriptPath -Encoding UTF8
+        [String[]]$ScriptData = Get-Content @G__GCSelfGlobal
 
         ForEach ($Key in $G__DataIndices.Keys) {
 
@@ -915,58 +1003,223 @@ Function Sync-Ets2ModRepo {
         $ScriptData -Join "`n" | Set-Content $G__ScriptPath @G__SCGlobal
     }
 
+    Function Switch-GrammaticalNumber {
+        [CmdletBinding(DefaultParameterSetName = 'Auto')]
+
+        Param (
+            [Parameter(Mandatory, Position = 0)][String]$Word,
+            [Parameter(ParameterSetName = 'Count', Position = 1)][Int64]$Count,
+            [Parameter(ParameterSetName = 'Singularize')][Alias('S')][Switch]$Singularize,
+            [Parameter(ParameterSetName = 'Pluralize')][Alias('P')][Switch]$Pluralize
+        )
+
+        If (!$G__PlrSvc) {Throw 'Pluralization service is not available'}
+
+        [String]$Switched = Switch ($PSCmdlet.ParameterSetName) {
+            'Auto'        {If ($G__PlrSvc.IsSingular($Word)) {$G__PlrSvc.Pluralize($Word)} ElseIf ($G__PlrSvc.IsPlural($Word)) {$G__PlrSvc.Singularize($Word)} Else {$Word} Break}
+            'Count'       {If ([Math]::Abs($Count) -eq 1) {$G__PlrSvc.Singularize($Word)} Else {$G__PlrSvc.Pluralize($Word)} Break}
+            'Singularize' {$G__PlrSvc.Singularize($Word); Break}
+            'Pluralize'   {$G__PlrSvc.Pluralize($Word); Break}
+            Default       {$Word}
+        }
+        
+        Return $Switched
+    }
+
+    Function Get-EnglishCulture {
+        [CmdletBinding()]
+
+        # Default: 1033, en-US (English, United States)
+        [String]$CurrentCulture = [CultureInfo]::CurrentCulture.Name
+        [String[]]$EngCultures  = ([CultureInfo]::GetCultures([Globalization.CultureTypes]::AllCultures) | Where-Object {$_.Name -Like 'en-*'}).Name | Select-Object -Unique
+
+        Return [CultureInfo]::GetCultureInfo(('en-US', $CurrentCulture)[$CurrentCulture -In $EngCultures])
+    }
+
+    Function Get-ModConfiguration {
+        [CmdletBinding()]
+
+        Param ([String]$ModConfigName = $G__ModConfiguration, [Switch]$Data, [Switch]$Raw)
+
+        [Byte[]]$ConfigBytes   = (Get-ModRepoFile $ModConfigName -UseIWR).Content
+        [String]$ConfigText    = [Text.Encoding]::UTF8.GetString($ConfigBytes)
+        [Hashtable]$ConfigData = Get-ModData $ConfigText
+
+        If     ($Data.IsPresent -And $Raw.IsPresent)  {Return $ConfigData, $ConfigText}
+        ElseIf ($Data.IsPresent -And !$Raw.IsPresent) {Return $ConfigData}
+        ElseIf (!$Data.IsPresent -And $Raw.IsPresent) {Return $ConfigText}
+        Else                                          {Return}
+    }
+
+    Function Remove-InactiveMods {
+        [CmdletBinding()]
+
+        [UInt64]$OldSize        = 0
+        [UInt16]$DeletedTargets = 0
+        [String[]]$EnabledFiles = ForEach ($Key in $G__ModConfigData.Keys | Where-Object {$G__ModConfigData[$_].Type -ne 'mod_workshop_package'}) {[IO.Path]::GetFileName($G__ModConfigData[$Key].SourcePath)}
+        [String[]]$Targets      = ForEach ($File in Get-ChildItem *.scs -File) {$OldSize += $File.Length; If ($File.Name -NotIn $EnabledFiles) {$File.Name}}
+        [Byte]$TargetPadding    = ($Targets | Sort-Object Length)[-1].Length + 12
+
+        Write-Host "`n Deleting $($Targets.Count) inactive $(Switch-GrammaticalNumber 'mod' $Targets.Count):"
+        ForEach ($Target in $Targets) {
+            Write-Host -NoNewline "    '$Target'...".PadRight($TargetPadding)
+            Try {
+                Remove-Item $Target -Force -ErrorAction Stop
+                $DeletedTargets++
+                Write-Host -ForegroundColor Green 'Deleted'
+            }
+            Catch {Write-Host -ForegroundColor Red 'Failed to delete'}
+        }
+
+        [UInt64]$NewSize        = (Get-ItemPropertyValue *.scs Length | Measure-Object -Sum).Sum
+        [String]$DeletionResult = Switch ($OldSize - $NewSize) {
+            {[Math]::Abs($_) -lt 1024}   {"$_ B"; Break}
+            {[Math]::Abs($_) -lt 1024kB} {"$([Math]::Round($_ / 1kB, 1)) kB"; Break}
+            {[Math]::Abs($_) -lt 1024MB} {"$([Math]::Round($_ / 1MB, 1)) MB"; Break}
+            {[Math]::Abs($_) -ge 1024MB} {"$([Math]::Round($_ / 1GB, 2)) GB"; Break}
+        }
+
+        Write-Host -ForegroundColor Green " Deleted $DeletedTargets inactive $(Switch-GrammaticalNumber 'mod' $DeletedTargets) ($DeletionResult)"
+    }
+
+    Function Select-ProfileConfiguration {
+
+        If (!$G__ProfileConfigs -Or $G__ProfileConfigs.Count -le 1) {Return $G__ModConfiguration}
+
+        Clear-Host
+        Write-Host ' SELECT PROFILE CONFIGURATION'
+        Write-Host ($G__UILine * [Console]::BufferWidth)
+
+        [Byte]$Selected                                   = (0, $G__ProfileConfigs.IndexOf($G__ModConfiguration))[$G__ModConfiguration -In $G__ProfileConfigs]
+        [String]$PreviousConfig                           = $G__ModConfiguration
+        [Management.Automation.Host.Coordinates]$StartPos = $Host.UI.RawUI.CursorPosition
+
+        Do {
+            $Host.UI.RawUI.CursorPosition = $StartPos
+
+            [Byte]$Iteration = 0
+
+            ForEach ($Config in $G__ProfileConfigs) {
+
+                [Bool]$IsSelected = $Iteration -eq $Selected
+
+                Write-Host -NoNewline ' '
+                Write-HostX 0 -Color ("DarkGray", "Green")[$IsSelected] (' ' + ('   ', '>> ')[$IsSelected] + "$Config ") -Newline
+                $Iteration++
+            }
+            Write-Host -NoNewline "`n * Use the "
+            Write-Host -NoNewline -ForegroundColor Cyan '[UP]'
+            Write-Host -NoNewline ' and '
+            Write-Host -NoNewline -ForegroundColor Cyan '[DOWN]'
+            Write-Host -NoNewline " keys to select a configuration.`n   Press "
+            Write-Host -NoNewline -ForegroundColor Cyan '[ENTER]'
+            Write-Host -NoNewline ' to confirm your selection, or '
+            Write-Host -NoNewline -ForegroundColor Cyan '[ESC]'
+            Write-Host ' to cancel.'
+
+            [String]$SelectedConfig = $G__ProfileConfigs[$Selected]
+
+            Do {
+                [Bool]$UpdateSelection = $False
+                Switch (Read-KeyPress -Clear) {
+                    13 { # [ENTER]
+                        Clear-Host
+                        Return ($PreviousConfig, $SelectedConfig)[$SelectedConfig -ne $PreviousConfig]
+                    }
+                    27 { # [ESC]
+                        Clear-Host
+                        Return $PreviousConfig
+                    }
+                    38 { # [UP]
+                        If ($Selected -gt 0) {$Selected--} Else {[Console]::Beep(1000, 150)}
+                        $UpdateSelection = $True
+                        Break
+                    }
+                    40 { # [DOWN]
+                        If ($Selected -lt $G__ProfileConfigs.Count - 1) {$Selected++} Else {[Console]::Beep(1000, 150)}
+                        $UpdateSelection = $True
+                        Break
+                    }
+                    Default {Continue}
+                }
+            } Until ($UpdateSelection)
+        } While ($True)
+    }
+
+    Function Get-ConfigList {
+        [CmdletBinding()]
+
+        [String[]]$ConfigList = (Get-ModRepoFile configurations.json -UseIWR).Content | ConvertFrom-JSON
+
+        Return $ConfigList
+    }
+
     $ErrorActionPreference = [Management.Automation.ActionPreference]::Stop
     $ProgressPreference    = [Management.Automation.ActionPreference]::SilentlyContinue
+
+    Add-Type -Assembly System.IO.Compression.FileSystem
+    Add-Type -Assembly System.Data.Entity.Design
 
     Trap {Wait-WriteAndExit ("`n`nFATAL ERROR`n" + (Format-AndExportErrorData $_))}
 
     Protect-Variables
 
     [Hashtable]$G__DataIndices = @{
-        ActiveProfile   = 1
-        StartGame       = 2
-        ValidateInstall = 3
-        DeleteDisabled  = 4
-        NoProfileConfig = 5
+        # ScriptVersion  = 0  <-- Script version is ALWAYS the first embedded value
+        ActiveProfile    = 1
+        StartGame        = 2
+        ValidateInstall  = 3
+        DeleteDisabled   = 4
+        NoProfileConfig  = 5
+        ModConfiguration = 6
+        StartSaveEditor  = 7
     }
-    [String]$G__RepositoryURL  = 'http://your.domain/repo'
-    [String]$G__ScriptPath     = $PSCommandPath
-    [UInt16]$G__WndWidth       = 120
-    [UInt16]$G__WndHeight      = 50
-    [Bool]$G__NoUpdate         = $False
-    [Bool]$G__HostCompatible   = Test-PSHostCompatibility
-    [Bool]$G__ClampAvailable   = 'Clamp' -In [String[]][Math].GetMethods().Name
-    [Hashtable]$G__SCGlobal    = @{Encoding = 'UTF8'; Force = $True}
+    [String]$G__RepositoryURL   = 'http://your.domain/ets2repository'
+    [String]$G__ScriptPath      = $PSCommandPath
+    [String]$G__UILine          = [Char]0x2500
+    [UInt16]$G__MinWndWidth     = 120
+    [UInt16]$G__MinWndHeight    = 50
+    [Bool]$G__ClampAvailable    = 'Clamp' -In [String[]][Math].GetMethods().Name
+    [Hashtable]$G__SCGlobal     = @{Encoding = 'UTF8'; Force = $True}
+    [Hashtable]$G__GCSelfGlobal = @{Path = $G__ScriptPath; Encoding = 'UTF8'}
+    [Hashtable]$G__RI_RENGlobal = @{Force = $True; ErrorAction = 'SilentlyContinue'}
 
-    [UInt32]$G__GameAppID         = 227300
-    [String]$G__GameName          = 'Euro Truck Simulator 2'
-    [String]$G__GameNameShort     = 'ETS2'
-    [String]$G__GameProcess       = 'eurotrucks2'
-    [String]$G__GameRootDirectory = [IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), $G__GameName)
-    [String]$G__GameLogPath       = "$G__GameRootDirectory\game.log.txt"
-    [String]$G__GameModDirectory  = "$G__GameRootDirectory\mod"
+    [Data.Entity.Design.PluralizationServices.PluralizationService]$G__PlrSvc = [Data.Entity.Design.PluralizationServices.PluralizationService]::CreateService((Get-EnglishCulture))
+
+    [UInt32]$G__GameAppID            = 227300
+    [String]$G__GameName             = 'Euro Truck Simulator 2'
+    [String]$G__GameNameShort        = 'ETS2'
+    [String]$G__GameProcess          = 'eurotrucks2'
+    [String]$G__GameRootDirectory    = [IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), $G__GameName)
+    [String]$G__GameLogPath          = "$G__GameRootDirectory\game.log.txt"
+    [String]$G__GameModDirectory     = "$G__GameRootDirectory\mod"
+    [String]$G__SaveEditorDirectory  = "$G__GameRootDirectory\TruckSaveEditor"
+    [String]$G__SaveEditorExecutable = "$G__SaveEditorDirectory\TS SE Tool.exe"
+    [String]$G__WorkshopDirectory    = Get-GameDirectory Workshop
 
     Set-Location $G__GameModDirectory
     [IO.Directory]::SetCurrentDirectory($G__GameModDirectory)
 
-    [Version]$G__ScriptVersion = Read-EmbeddedValue 0
-    [Bool]$G__DeleteDisabled   = Read-EmbeddedValue $G__DataIndices.DeleteDisabled
-    [Bool]$G__ValidateInstall  = Read-EmbeddedValue $G__DataIndices.ValidateInstall
-    [Bool]$G__NoProfileConfig  = Read-EmbeddedValue $G__DataIndices.NoProfileConfig
-    [Bool]$G__StartGame        = Read-EmbeddedValue $G__DataIndices.StartGame
+    [Bool]$G__NoUpdate           = $False
+    [Version]$G__ScriptVersion   = Read-EmbeddedValue 0
+    [Bool]$G__DeleteDisabled     = Read-EmbeddedValue $G__DataIndices.DeleteDisabled
+    [Bool]$G__ValidateInstall    = Read-EmbeddedValue $G__DataIndices.ValidateInstall
+    [Bool]$G__NoProfileConfig    = Read-EmbeddedValue $G__DataIndices.NoProfileConfig
+    [Bool]$G__StartGame          = Read-EmbeddedValue $G__DataIndices.StartGame
+    [String]$G__ModConfiguration = Read-EmbeddedValue $G__DataIndices.ModConfiguration
+    [Bool]$G__StartSaveEditor    = Read-EmbeddedValue $G__DataIndices.StartSaveEditor
 
-    If ($G__HostCompatible) {
-        [Console]::CursorVisible = $False
-        [Console]::Title         = "$G__GameNameShort External Mod Manager v$G__ScriptVersion"
-        [Console]::SetWindowSize($G__WndWidth, $G__WndHeight)
-    }
-    Else {Wait-WriteAndExit ("Startup aborted - Incompatible console host.`nCurrent host '" + $Host.Name + "' does not support required functionality.")}
+    If (!(Test-PSHostCompatibility)) {Wait-WriteAndExit ("Startup aborted - Incompatible console host.`nCurrent host '" + $Host.Name + "' does not support required functionality.")}
 
-    [String]$G__SaveEditorDirectory = "$G__GameRootDirectory\TruckSaveEditor"
-    [String]$G__WorkshopDirectory   = Get-GameDirectory Workshop
+    [Console]::CursorVisible     = $False
+    [Console]::Title             = "$G__GameNameShort External Mod Manager v$G__ScriptVersion"
+    [UInt16]$WndX, [UInt16]$WndY = [Console]::WindowWidth, [Console]::WindowHeight
+    [UInt16]$G__WndWidth         = ($WndX, $G__MinWndWidth)[$WndX -lt $G__MinWndWidth]
+    [UInt16]$G__WndHeight        = ($WndY, $G__MinWndHeight)[$WndY -lt $G__MinWndHeight]
+    [Console]::SetWindowSize($G__WndWidth, $G__WndHeight)
 
-    [Bool]$GLOBAL:G__ScriptRestart  = ($GLOBAL:G__ScriptRestart, $False)[$Null -eq $GLOBAL:G__ScriptRestart]
-    [ScriptBlock]$G__EXEC_RESTART   = {If ($GLOBAL:G__ScriptRestart -eq $True) {Unprotect-Variables; Remove-Variable G__ScriptRestart -Scope GLOBAL -ErrorAction SilentlyContinue; Return ''}}
+    [Bool]$GLOBAL:G__ScriptRestart = ($GLOBAL:G__ScriptRestart, $False)[$Null -eq $GLOBAL:G__ScriptRestart]
+    [ScriptBlock]$G__EXEC_RESTART  = {If ($GLOBAL:G__ScriptRestart -eq $True) {Unprotect-Variables; Remove-Variable G__ScriptRestart -Scope GLOBAL -ErrorAction SilentlyContinue; Return ''}}
     
     If (![IO.Directory]::Exists($G__GameModDirectory)) {Wait-WriteAndExit "Startup aborted - Cannot locate the $G__GameNameShort mod directory '$G__GameModDirectory'.`nVerify that $G__GameName is correctly installed and try again."}
     If ($PSScriptRoot -ne $G__GameModDirectory)        {Wait-WriteAndExit "Startup aborted - Invalid script location.`n'$G__ScriptPath' must be placed in '$G__GameModDirectory' to run."}
@@ -974,28 +1227,28 @@ Function Sync-Ets2ModRepo {
     [String]$G__ActiveProfile     = Get-ActiveProfile
     [String]$G__ProfilePath       = "$G__GameRootDirectory\profiles\$G__ActiveProfile"
     [String]$G__ProfileUnit       = "$G__ProfilePath\profile.sii"
+    [String]$G__TempProfileUnit   = "$Env:TEMP\profile.sii"
     [String]$G__ActiveProfileName = Convert-ProfileFolderName
+    [String[]]$G__ProfileConfigs  = Get-ConfigList -ErrorAction SilentlyContinue
 
     [Hashtable]$G__ScriptDetails = @{
         Author      = 'RainBawZ'
         Copyright   = [Char]0x00A9 + (Get-Date -Format yyyy)
         Title       = "$G__GameName External Mod Manager"
         Version     = "Version $G__ScriptVersion"
-        VersionDate = '2024.2.20'
+        VersionDate = '2024.5.3'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
-
     [String[]]$G__UpdateNotes = @(
-        '3.4.1:',
-        '- Improved visual feedback when saving settings',
-        ' ',
-        '3.4.0:',
-        '- Added ability to save and auto-apply updater settings in future runs',
-        '- Fixed issues with overlapping text in the menu interface',
-        '- Fixed issue with locating Steam Workshop directory on 32-bit systems',
-        '- Improved mod usage detection',
-        '- Improved menu interface appearance'
+        '- (WIP) Added functionality to export and import profile configuration files.',
+        '- Added support for selecting additional profile configurations',
+        '- Added option to start TS SE Tool alongside the game.',
+        '- Fixed an issue where using the "Delete inactive mods" could also delete active mods.',
+        '- Changed inactive mod deletion to reference the current profile configuration instead of the mod list.',
+        '- Improved text formatting and readability',
+        '- Improved window resizing logic',
+        '- Under-the-hood improvements and optimizations'
     )
     [String[]]$G__KnownIssues = @()
 
@@ -1010,7 +1263,7 @@ Function Sync-Ets2ModRepo {
         Clear-Host
         Write-Host " Checking Mod Manager version...`n"
         Write-Host (' ' + 'Installed'.PadRight($Padding) + 'Current'.PadRight($Padding) + 'Status')
-        Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+        Write-Host ($G__UILine * [Console]::BufferWidth)
         Write-Host -NoNewline (' ' + "$G__ScriptVersion".PadRight($Padding))
 
         Try {
@@ -1058,14 +1311,17 @@ Function Sync-Ets2ModRepo {
 
     Show-LandingScreen
     [Bool]$Save = $False
-    While ($True) {
-        Clear-HostFancy 19 0 0
-        If ((Invoke-Expression (Show-Menu -Saved:$Save)) -eq 'Menu') {Return ''}
-    }
+    Clear-HostFancy 19 0 10
+    While ($True) {If ((Invoke-Expression (Invoke-Menu -Saved:$Save)) -eq 'Menu') {Return ''}}
+
+    Remove-Variable Save -ErrorAction SilentlyContinue
+    [Hashtable]$G__ModConfigData, [String]$G__ModConfigText = Get-ModConfiguration -Raw -Data
+    [UInt16]$G__ActiveModsCount = (($G__ModConfigText -Split "`n", 2)[0] -Split ':', 2)[-1].Trim()
+    Update-ProtectedVars
 
     Clear-Host
-    Write-Host "`n    $($G__ScriptDetails['Title'])`n"
-    Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+    Write-Host "`n    $($G__ScriptDetails['Title'])   v$G__ScriptVersion`n"
+    Write-Host ($G__UILine * [Console]::BufferWidth)
 
     If ($G__NoUpdate) {
         Write-Host "`n Configuring profile..."
@@ -1080,11 +1336,11 @@ Function Sync-Ets2ModRepo {
     }
     If ($G__ValidateInstall) {
         Start-Process "steam://validate/$G__GameAppID"
-        Write-Host 'Started game file validation.'
+        Write-Host ' Started game file validation.'
         Start-Sleep 1
         Set-ForegroundWindow -Self
     }
-
+    [PSObject]$G__OnlineData    = [PSObject]::New()
     [Byte]$Failures             = 0
     [Byte]$Invalids             = 0
     [Byte]$Successes            = 0
@@ -1097,59 +1353,58 @@ Function Sync-Ets2ModRepo {
     [String[]]$PreviousProgress = @()
     [Hashtable]$LocalMods       = @{}
 
+    Try   {$G__OnlineData = (Get-ModRepoFile versions.json -UseIWR).Content | ConvertFrom-JSON}
+    Catch {Wait-WriteAndExit (" Unable to fetch version data from repository. Try again later.`nReason: " + (Format-AndExportErrorData $_))}
+
     Update-ProtectedVars
 
-    Add-Type -Assembly System.IO.Compression.FileSystem
+    [String[]]$Names    = @()
+    [String[]]$Versions = @('Installed')
 
     If ([IO.File]::Exists('versions.txt')) {
         [UInt64]$Line = 0
 
-        ForEach ($RawData in Get-Content versions.txt -Encoding UTF8) {
+        ForEach ($LocalVersionData in Get-Content versions.txt -Encoding UTF8) {
             $Line++
 
-            [String]$Name, [Version]$Ver = ($RawData -Split '=', 3)[0..1]
+            [String]$Name, [Version]$Ver = ($LocalVersionData -Split '=', 3)[0..1]
             If (Test-ArrayNullOrEmpty ($Name, $Ver)) {
                 Try     {Throw "versions.txt[$Line]: Invalid data"}
                 Catch   {[Void](Format-AndExportErrorData $_)}
                 Continue
             }
 
+            [String]$FileName = "$Name.scs"
+            [String]$VerStr   = $Ver.ToString()
+
             $LocalMods[$Name] = [Hashtable]@{
-                FileName   = "$Name.scs"
+                FileName   = $FileName
                 Version    = $Ver
-                VersionStr = [String]$Ver
+                VersionStr = $VerStr
             }
 
-            If ($Name.Length -gt $LongestName)       {$LongestName      = $Name.Length}
-            If ("$Ver".Length -gt $L_LongestVersion) {$L_LongestVersion = "$Ver".Length}
+            $Names    += $Name
+            $Versions += "$Ver"
         }
     }
 
-    Try   {[PSCustomObject]$OnlineData = (Get-ModRepoFile versions.json -UseIWR).Content | ConvertFrom-JSON}
-    Catch {Wait-WriteAndExit ("Unable to fetch version data from repository. Try again later.`nReason: " + (Format-AndExportErrorData $_))}
-
-    ForEach ($Mod in $OnlineData.PSObject.Properties.Value) {
-        If ($Mod.Name.Length -gt $LongestName)         {$LongestName      = $Mod.Name.Length}
-        If ($Mod.Version.Length -gt $E_LongestVersion) {$E_LongestVersion = $Mod.Version.Length}
-    }
+    $LongestName      = ($Names + $G__OnlineData.PSObject.Properties.Value.Name | Sort-Object Length)[-1].Length + 3
+    $L_LongestVersion = ($Versions | Sort-Object Length)[-1].Length + 3
+    $E_LongestVersion = (@('Current') + $G__OnlineData.PSObject.Properties.Value.VersionStr | Sort-Object Length)[-1].Length + 3
 
     If ([IO.File]::Exists('progress.tmp')) {
         $PreviousProgress = Get-Content progress.tmp -Encoding UTF8
         Remove-Item progress.tmp -Force
     }
 
-    $L_LongestVersion += 3
-    $E_LongestVersion += 3
-    $LongestName      += 3
-
-    Write-Host ("Active profile: $G__ActiveProfileName".PadLeft($Host.UI.RawUI.BufferSize.Width - 1) + "`n" + $G__ActiveProfile.PadLeft($Host.UI.RawUI.BufferSize.Width - 1))
+    Write-Host ("Active profile: $G__ActiveProfileName".PadLeft([Console]::BufferWidth - 1) + "`n" + $G__ActiveProfile.PadLeft([Console]::BufferWidth - 1))
     Write-Host (' ' + 'Mod'.PadRight($LongestName) + 'Installed'.PadRight($L_LongestVersion) + 'Current'.PadRight($E_LongestVersion) + 'Status')
-    Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+    Write-Host ($G__UILine * [Console]::BufferWidth)
 
-    ForEach ($CurrentMod in $OnlineData.PSObject.Properties.Value) {
+    ForEach ($CurrentMod in $G__OnlineData.PSObject.Properties.Value) {
         
         $CurrentMod.Version  = [Version]$CurrentMod.Version
-        [String]$OldFile     = ('old_' + $CurrentMod.FileName)
+        [String]$OldFile     = 'old_' + $CurrentMod.FileName
         [Hashtable]$LocalMod = $LocalMods.($CurrentMod.Name)
         [Byte]$Repair        = 0 # 0: No repair   1: Entry   2: File
 
@@ -1171,7 +1426,7 @@ Function Sync-Ets2ModRepo {
             Continue
         }
 
-        [UInt16]$XPos = $Host.UI.RawUI.CursorPosition.X
+        [UInt16]$XPos = [Console]::CursorLeft
 
         If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -eq 2) {
             Write-Host -NoNewline ('Validating...', $Status)[[Bool]$Repair]
@@ -1196,7 +1451,7 @@ Function Sync-Ets2ModRepo {
         If ($LocalMod.Version -lt $CurrentMod.Version -Or [Bool]$Repair) {
             If ([IO.File]::Exists($CurrentMod.FileName)) {
                 [UInt64]$OriginalSize = Get-ItemPropertyValue $CurrentMod.FileName Length
-                Rename-Item $CurrentMod.FileName $OldFile -Force -ErrorAction SilentlyContinue
+                Rename-Item $CurrentMod.FileName $OldFile @G__RI_RENGlobal
             }
             Else {[UInt64]$OriginalSize = 0}
 
@@ -1222,8 +1477,8 @@ Function Sync-Ets2ModRepo {
                 $Successes++
             }
             Catch {
-                If ([IO.File]::Exists($CurrentMod.FileName)) {Remove-Item $CurrentMod.FileName -Force -ErrorAction SilentlyContinue}
-                If ([IO.File]::Exists($OldFile))             {Rename-Item $OldFile $CurrentMod.FileName -Force -ErrorAction SilentlyContinue}
+                If ([IO.File]::Exists($CurrentMod.FileName)) {Remove-Item $CurrentMod.FileName @G__RI_RENGlobal}
+                If ([IO.File]::Exists($OldFile))             {Rename-Item $OldFile $CurrentMod.FileName @G__RI_RENGlobal}
                 $NewVersions += ($CurrentMod.Name, $LocalMod.VersionStr) -Join '='
                 $Failures++
 
@@ -1234,14 +1489,14 @@ Function Sync-Ets2ModRepo {
 
     If (![IO.Directory]::Exists($G__SaveEditorDirectory)) {
 
-        Write-Host -NoNewline (' ' + 'Save Editor'.PadRight($LongestName) + '---'.PadRight($L_LongestVersion))
+        Write-Host -NoNewline (' ' + 'TS SE Tool'.PadRight($LongestName) + '---'.PadRight($L_LongestVersion))
         Write-Host -NoNewline -ForegroundColor Green '---'.PadRight($E_LongestVersion)
 
-        [UInt16]$XPos = $Host.UI.RawUI.CursorPosition.X
+        [UInt16]$XPos = [Console]::CursorLeft
 
         Write-Host -NoNewline -ForegroundColor Green 'Installing...'
 
-        If ($G__HostCompatible) {[Console]::SetCursorPosition($XPos, $Host.UI.RawUI.CursorPosition.Y)}
+        [Console]::SetCursorPosition($XPos, [Console]::CursorTop)
 
         Try {
             [Void](Get-ModRepoFile TruckSaveEditor.zip -UseIWR -Save)
@@ -1263,41 +1518,11 @@ Function Sync-Ets2ModRepo {
     }
 
     $NewVersions -Join "`n" | Set-Content versions.txt @G__SCGlobal
-    Remove-Item progress.tmp -Force -ErrorAction SilentlyContinue
+    Remove-Item progress.tmp @G__RI_RENGlobal
 
-    Write-Host ('-' * $Host.UI.RawUI.BufferSize.Width)
+    Write-Host ($G__UILine * [Console]::BufferWidth)
 
-    If ($G__DeleteDisabled) {
-        [UInt64]$PreDeletionSize  = 0
-        [UInt64]$PostDeletionSize = 0
-        [String[]]$InstalledFiles = (Get-ChildItem *.scs -File).Name
-        [String[]]$EnabledFiles   = $OnlineData.PSObject.Properties.Value.FileName
-        [String[]]$Targets        = ForEach ($File in $InstalledFiles) {If ($File -NotIn $EnabledFiles) {$File}}
-        [Byte]$LongestTarget      = ($Targets | Sort-Object Length | Select-Object -Last 1).Length + 9
-
-        ForEach ($Filesize in Get-ItemPropertyValue *.scs Length) {$PreDeletionSize += $Filesize}
-
-        Write-Host "`nDeleting $($Targets.Count) inactive mod$(('', 's')[$Targets.Count -ne 1]):"
-        ForEach ($Target in $Targets) {
-            Write-Host -NoNewline "    $Target...".PadRight($LongestTarget)
-            Try {
-                Remove-Item $Target -Force -ErrorAction Stop
-                Write-Host -ForegroundColor Green 'Deleted'
-            }
-            Catch {Write-Host -ForegroundColor Red 'Failed to delete'}
-        }
-
-        ForEach ($Filesize in Get-ItemPropertyValue *.scs Length) {$PostDeletionSize += $Filesize}
-        
-        [String]$DeletionTotal = Switch ($PreDeletionSize - $PostDeletionSize) {
-            {[Math]::Abs($_) -lt 1024}   {"$_ B"; Break}
-            {[Math]::Abs($_) -lt 1024kB} {"$([Math]::Round($_ / 1kB, 1)) kB"; Break}
-            {[Math]::Abs($_) -lt 1024MB} {"$([Math]::Round($_ / 1MB, 1)) MB"; Break}
-            {[Math]::Abs($_) -ge 1024MB} {"$([Math]::Round($_ / 1GB, 2)) GB"; Break}
-        }
-
-        Write-Host -ForegroundColor Green "Freed up $DeletionTotal of inactive mods."
-    }
+    If ($G__DeleteDisabled) {Remove-InactiveMods}
 
     If (!$G__NoProfileConfig) {
         Write-Host "`n Configuring profile..."
@@ -1305,9 +1530,9 @@ Function Sync-Ets2ModRepo {
         Enable-OnlineModList
     }
 
-    [String]$S_PluralMod  = 'mod' + ('s', '')[($Successes -eq 1)]
-    [String]$F_PluralMod  = 'mod' + ('s', '')[($Failures -eq 1)]
-    [String]$I_PluralMod  = 'mod' + ('s', '')[($Invalids -eq 1)] 
+    [String]$S_PluralMod  = Switch-GrammaticalNumber 'mod' $Successes
+    [String]$F_PluralMod  = Switch-GrammaticalNumber 'mod' $Failures
+    [String]$I_PluralMod  = Switch-GrammaticalNumber 'mod' $Invalids
 
     [ConsoleColor]$ColorA = Switch ($Null) {{$Failures -eq 0} {"Green"} {$Failures -gt 0 -And $Successes -eq 0} {"Red"} {$Failures -gt 0 -And $Successes -gt 0} {"Yellow"}}
     [ConsoleColor]$ColorB = ("White", "Yellow", "Red")[[Math]::Min(2, [Math]::Ceiling($Invalids / 2))]
@@ -1337,9 +1562,13 @@ Function Sync-Ets2ModRepo {
     If ($Failures -gt 0)              {Write-Host @TextColor "   $Failures $F_PluralMod failed to process"}
     If ($Invalids -gt 0)              {Write-Host -ForegroundColor $ColorB "   $Invalids $I_PluralMod failed to validate"}
     If ($Failures + $Invalids -gt 0)  {Write-Host @TextColor "`n Exit and restart the updater to try again"}
+    Write-Host "`n"
 
-    Wait-KeyPress "Press any key to$(('', ' launch game and')[$G__StartGame]) exit"
-    If ($Successes + $Failures -eq 0 -And $G__StartGame) {Start-Process "steam://launch/$G__GameAppID/dialog"}
+    Wait-KeyPress " Press any key to$(('', " launch $G__GameNameShort $(('', '+ TS SE Tool ')[$G__StartSaveEditor])and")[$G__StartGame]) exit"
+    If ($Successes + $Failures -eq 0 -And $G__StartGame) {
+        If ($G__GameProcess -NotIn (Get-Process).Name) {Start-Process "steam://launch/$G__GameAppID/dialog"}
+        If ($G__StartSaveEditor -And [IO.File]::Exists($G__SaveEditorExecutable) -And 'TS SE Tool' -NotIn (Get-Process).Name) {Start-Process $G__SaveEditorExecutable}
+    }
     Unprotect-Variables
     Return
 }
