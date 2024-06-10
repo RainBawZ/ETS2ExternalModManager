@@ -1,1 +1,11 @@
-{"Script":"ETS2ExtModMan.ps1","DefaultOrder":"Load_Order","Orders":"load_orders.json","VersionData":"versions.json","DecFile":"sii_decrypt.exe","DecHash":"DecHash.txt","TSSE":"TS_SE_Tool.zip"}
+{
+  "Script": "ETS2ExtModMan.ps1",
+  "ModRoot": "Mods/",
+  "OrderRoot": "LoadOrders/",
+  "DefaultOrder": "Load_Order",
+  "Orders": "load_orders.json",
+  "VersionData": "versions.json",
+  "DecFile": "Dec/DecHash.txt",
+  "DecHash": "Dec/sii_decrypt.txt",
+  "TSSE": "TS_SE_Tool.zip"
+}
