@@ -29,9 +29,12 @@ Finally {
 Set-Location $PSScriptRoot
 [IO.Directory]::SetCurrentDirectory($PSScriptRoot)
 
+[String]$Dir = (Get-Content information.json | ConvertFrom-JSON).ModRoot -Replace '/', '\'
+[String]$VerList = (Get-Content information.json | ConvertFrom-JSON).VersionData -Replace '/', '\'
+
 [Globalization.TextInfo]$TextInfo = (Get-Culture).TextInfo
 
-[String]$GetSCSFileVersion = (Get-Content Update-VersionData.ps1)[1..25] -Join "`n"
+[String]$GetSCSFileVersion = (Get-Content ([IO.Path]::GetFileName($PSCommandPath)))[1..25] -Join "`n"
 
 [Collections.Generic.List[String[]]]$Replace = @(
     @('Ai ', 'AI '),
@@ -46,10 +49,10 @@ Set-Location $PSScriptRoot
     @('Rjl ', 'RJL ')
 )
 
-[String[]]$Files = (Get-ChildItem *.scs -File).Name
+[String[]]$Files = (Get-ChildItem "$($Dir)*.scs" -File).Name
 
-If ([IO.File]::Exists('versions.json')) {
-    [PSObject]$vData      = Get-Content versions.json -Raw -Encoding UTF8 | ConvertFrom-JSON
+If ([IO.File]::Exists($VerList)) {
+    [PSObject]$vData      = Get-Content $VerList -Raw -Encoding UTF8 | ConvertFrom-JSON
     [String[]]$vDataFiles = ($vData.PSObject.Properties.Name | Foreach-object {$vData.$_}).FileName
     [String[]]$AllFiles   = $Files + $vDataFiles | Select-Object -Unique | Sort-Object
 }
@@ -71,7 +74,7 @@ ForEach ($File in $AllFiles) {
         Continue
     }
 
-    [IO.FileInfo]$CurrentFile = Get-ChildItem $File -File
+    [IO.FileInfo]$CurrentFile = Get-ChildItem "$($Dir)$File" -File
 
     [String]$Name = $CurrentFile.BaseName
     [UInt64]$Size = $CurrentFile.Length
@@ -148,9 +151,9 @@ Write-Host ''
 If (!$HasChanged) {Exit}
 
 Try {
-    Write-Host -NoNewline 'Writing ''versions.json''...'.PadRight($Longest)
+    Write-Host -NoNewline "Writing '$VerList'...".PadRight($Longest)
 
-    $Mods | ConvertTo-JSON -Compress | Set-Content versions.json -NoNewline
+    $Mods | ConvertTo-JSON -Compress | Set-Content $VerList -NoNewline
 
     Write-Host -ForegroundColor Green 'OK'
 }
