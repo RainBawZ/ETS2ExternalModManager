@@ -1,13 +1,13 @@
-#STR_version=3.5.2.2;
-#STR_profile=***GAME_PROFILE_PLACEHOLDER***;
+#STR_version=3.5.3;
+#STR_profile=015261696E4261775A;
 #NUM_start=0;
 #NUM_validate=0;
 #NUM_purge=0;
 #NUM_noconfig=0;
 #STR_loadorder=Default;
 #NUM_editor=0;
-#STR_server=http://your.domain/repo;
-#STR_offlinedata={};
+#STR_server=http://tams.pizza/ets2repo;
+#STR_offlinedata={"Script":"ETS2ExtModMan.ps1","ModRoot":"","OrderRoot":"LoadOrders/","DefaultOrder":"Default","Orders":"load_orders.json","VersionData":"versions.json","DecFile":"Dec/sii_decrypt.exe","DecHash":"Dec/sii_decrypt.txt","TSSE":"TruckSaveEditor.zip"};
 
 #***GAME_PROFILE_PLACEHOLDER***
 
@@ -1172,7 +1172,7 @@ Function Sync-Ets2ModRepo {
         Param ([String]$Name = $G__LoadOrder, [Switch]$Data, [Switch]$Raw)
 
         [String]$Content = If     ([IO.Path]::GetExtension($Name) -eq '.order') {Get-Content $Name -Encoding UTF8 -Raw}
-                           ElseIf (!$G__OfflineMode)                            {[Text.Encoding]::UTF8.GetString((Get-ModRepoFile "$Name.cfg" -UseIWR).Content)}
+                           ElseIf (!$G__OfflineMode)                            {[Text.Encoding]::UTF8.GetString((Get-ModRepoFile "$($G__RepositoryInfo.OrderRoot)$Name.cfg" -UseIWR).Content)}
                            Else                                                 {Throw [ApplicationException]::New('Unavailable. (Offline mode)')}
 
         If (!(Test-LoadOrderFormat $Content -ShowInfo -ContinueOnError)) {Throw 'Invalid load order data'}
@@ -1319,7 +1319,7 @@ Function Sync-Ets2ModRepo {
             Return [String[]]@($G__LoadOrder)
         }
 
-        [String[]]$LoadOrderList = (Get-ModRepoFile $G__RepositoryInfo.Orders -UseIWR).Content | ConvertFrom-JSON
+        [String[]]$LoadOrderList = (Get-ModRepoFile "$($G__RepositoryInfo.OrderRoot)$($G__RepositoryInfo.Orders)" -UseIWR).Content | ConvertFrom-JSON
 
         Write-Log INFO "Fetched available load orders ($($LoadOrderList.Count)) from master server"
 
@@ -1663,13 +1663,12 @@ Function Sync-Ets2ModRepo {
         Title       = "$G__GameName External Mod Manager"
         ShortTitle  = 'ETS2ExtModMan'
         Version     = "Version $G__ScriptVersion"
-        VersionDate = '2024.6.4'
+        VersionDate = '2024.6.10'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     [String[]]$G__UpdateNotes = @(
-        '- Fixed issue with broken mod versions causing unnecessary redownloading.',
-        '- Improved file validation. Files now validate up to 20% faster.'
+        '- Server-side customization improvements.'
     )
     [String[]]$G__KnownIssues = @()
 
@@ -1787,9 +1786,9 @@ Function Sync-Ets2ModRepo {
     If ($G__ValidateInstall) {
         Start-Process "steam://validate/$G__GameAppID"
         Write-Log INFO 'Started game file validation.'
-        Write-Host ' Started game file validation.'
-        Start-Sleep 1
+        Start-Sleep 2
         Set-ForegroundWindow -Self
+        Write-Host ' Started game file validation.'
     }
 
     Update-ProtectedVars
@@ -1909,7 +1908,7 @@ Function Sync-Ets2ModRepo {
                     If (Test-ModActive $CurrentMod.Name) {Throw [IO.IOException]::New("Close $G__GameName to update this mod.")}
 
                     Write-Log INFO "'$($CurrentMod.Name)': Downloading."
-                    [String]$Result, [UInt64]$NewSize = Get-ModRepoFile $CurrentMod.FileName $XPos $Status
+                    [String]$Result, [UInt64]$NewSize = Get-ModRepoFile "$($G__RepositoryInfo.ModRoot)$($CurrentMod.FileName)" $XPos $Status
 
                     If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
                     If ($Repair -eq 0 )              {Write-HostX $XPos 'Validating...'}
