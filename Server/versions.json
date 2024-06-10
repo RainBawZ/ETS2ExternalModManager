@@ -5,6 +5,16 @@
         "Name": "sample_mod",
         "FileName": "sample_mod.scs",
         "VersionStr": "1.0",
-        "Hash": "7EB719DA86044ACB0F3BE3301AE7C70D1A6037CE"
+        "Hash": "7EB719DA86044ACB0F3BE3301AE7C70D1A6037CE",
+        "Size": "1"
+    },
+    "example_mod": {
+        "Version": "3.1.5",
+        "Title": "Example Mod",
+        "Name": "example_mod",
+        "FileName": "example_mod.scs",
+        "VersionStr": "3.1.5",
+        "Hash": "6DDA19DA86044EE78ACE3301AE7C70D1A6037CE",
+        "Size": "1"
     }
 }
