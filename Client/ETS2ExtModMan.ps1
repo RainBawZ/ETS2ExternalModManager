@@ -1,5 +1,5 @@
 #STR_version=3.5.3;
-#STR_profile=015261696E4261775A;
+#STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
 #NUM_purge=0;
