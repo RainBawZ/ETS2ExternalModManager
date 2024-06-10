@@ -6,8 +6,8 @@
 #NUM_noconfig=0;
 #STR_loadorder=Default;
 #NUM_editor=0;
-#STR_server=http://tams.pizza/ets2repo;
-#STR_offlinedata={"Script":"ETS2ExtModMan.ps1","ModRoot":"","OrderRoot":"LoadOrders/","DefaultOrder":"Default","Orders":"load_orders.json","VersionData":"versions.json","DecFile":"Dec/sii_decrypt.exe","DecHash":"Dec/sii_decrypt.txt","TSSE":"TruckSaveEditor.zip"};
+#STR_server=http://your.domain/repo;
+#STR_offlinedata={};
 
 #***GAME_PROFILE_PLACEHOLDER***
 
