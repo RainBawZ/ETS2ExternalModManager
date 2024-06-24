@@ -1,4 +1,4 @@
-#STR_version=3.5.3;
+#STR_version=3.5.2.4;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
@@ -283,24 +283,22 @@ Function Sync-Ets2ModRepo {
         [CmdletBinding()]
 
         Param (
-            [Parameter(Position = 0)][AllowNull()][String]$File,
+            [Parameter(Position = 0)][IO.FileInfo]$File,
             [Parameter(Mandatory, Position = 1)][String]$Hash,
             [Parameter(Position = 2)][UInt64]$Size
         )
 
-        If (![IO.File]::Exists($File))                        {Return $False}
-        If ($Size -And ([IO.FileInfo]$File).Length -ne $Size) {Return $False}
+        If (!$File.Exists -Or ($Size -And $File.Length -ne $Size)) {Return $False}
 
-        [UInt64]$BufferSize        = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min(([IO.FileInfo]$File).Length, [GC]::GetTotalMemory($False) / 4), 2)))
-        [IO.FileStream]$FileStream = [IO.FileStream]::New($File, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read, $BufferSize)
-        Try {
-            [Byte[]]$Bytes    = $G__CryptoProvider.ComputeHash($FileStream)
-            [String]$FileHash = [BitConverter]::ToString($Bytes) -Replace '-', ''
-            Return $FileHash -eq $Hash
-        }
+        [UInt64]$Buffer        = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min($File.Length, [GC]::GetTotalMemory($False) / 4), 2)))
+
+        [IO.FileStream]$Stream = [IO.FileStream]::New($File.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read, $Buffer)
+
+        Try     {Return [BitConverter]::ToString($G__CryptoProvider.ComputeHash($Stream)) -Replace '-', '' -eq $Hash}
+        Catch   {Return $False}
         Finally {
-            $FileStream.Close()
-            $FileStream.Dispose()
+            $Stream.Close()
+            $Stream.Dispose()
         }
     }
 
@@ -516,23 +514,23 @@ Function Sync-Ets2ModRepo {
     Function Get-GameUnitDecoder {
         [CmdletBinding()]
 
-        Param ()
+        Param ([String]$DecFile = $G__RepositoryInfo.DecFile)
 
-        [String]$Path     = [IO.Path]::Combine($Env:TEMP, $G__RepositoryInfo.DecFile)
+        [String]$Path     = "$Env:TEMP\$DecFile"
         [String]$Checksum = (Get-ModRepoFile $G__RepositoryInfo.DecHash -UseIWR).Content
 
         If (![IO.File]::Exists($Path)) {
             If ($G__OfflineMode) {Throw 'Offline mode is enabled. Unable to download files.'}
 
-            [IO.File]::WriteAllBytes($Path, [Byte[]](Get-ModRepoFile $G__RepositoryInfo.DecFile -UseIWR).Content)
+            [IO.File]::WriteAllBytes($Path, [Byte[]](Get-ModRepoFile $DecFile -UseIWR).Content)
             Write-Log INFO "Game unit decoder downloaded to '$Path'"
         }
         If (!(Test-FileHash $Path $Checksum)) {
-            Write-Log ERROR "Unable to verify $($G__RepositoryInfo.DecFile) - Checksum mismatch. The file will be deleted."
+            Write-Log ERROR "Unable to verify '$DecFile' - Checksum mismatch. The file will be deleted."
 
             Remove-Item $Path -Force -ErrorAction SilentlyContinue
 
-            Throw "Unable to verify $($G__RepositoryInfo.DecFile) - Checksum mismatch"
+            Throw "Unable to verify '$DecFile' - Checksum mismatch"
         }
 
         Return $Path
@@ -685,9 +683,9 @@ Function Sync-Ets2ModRepo {
 
         Param ()
 
-        [String]$OutFile = Get-FilePathByDialog 'Save load order as...' 'Load order file (*.order)|*.order|All files (*.*)|*.*' 'MyLoadOrder.order' -Mode Save
+        [String]$SaveTarget = Get-FilePathByDialog 'Save load order as...' 'Load order file (*.order)|*.order|All files (*.*)|*.*' 'MyLoadOrder.order' -Mode Save
 
-        If ($OutFile) {
+        If ($SaveTarget) {
 
             Try {
                 [String]$ProfileFormat = Get-ProfileUnitFormat $G__ProfileUnit
@@ -696,14 +694,15 @@ Function Sync-Ets2ModRepo {
 
                 [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All -Direct:($ProfileFormat -eq 'Text')
 
-                $ProfileMods -Join "`n" | Out-File $OutFile -Encoding UTF8 -NoNewline -Force
+                $ProfileMods -Join "`n" | Out-File $SaveTarget -Encoding UTF8 -NoNewline -Force
 
-                Write-Log INFO "Load order exported to '$OutFile'"
+                Write-Log INFO "Load order exported to '$SaveTarget'"
 
-                [Void][Windows.MessageBox]::Show("Load order exported successfully to:`n$OutFile", 'Export successful', 0, 64)
+                [Void][Windows.MessageBox]::Show("Load order exported successfully to:`n$SaveTarget", 'Export successful', 0, 64)
             }
             Catch {
                 Write-Log ERROR "An error occurred while exporting the load order: $($_.Exception.Message)"
+                Format-AndExportErrorData $_
                 [Void][Windows.MessageBox]::Show("An error occurred while exporting the load order:`n$($_.Exception.Message)", 'Export failed', 0, 16)
             }
         }
@@ -1172,7 +1171,7 @@ Function Sync-Ets2ModRepo {
         Param ([String]$Name = $G__LoadOrder, [Switch]$Data, [Switch]$Raw)
 
         [String]$Content = If     ([IO.Path]::GetExtension($Name) -eq '.order') {Get-Content $Name -Encoding UTF8 -Raw}
-                           ElseIf (!$G__OfflineMode)                            {[Text.Encoding]::UTF8.GetString((Get-ModRepoFile "$($G__RepositoryInfo.OrderRoot)$Name.cfg" -UseIWR).Content)}
+                           ElseIf (!$G__OfflineMode)                            {[Text.Encoding]::UTF8.GetString((Get-ModRepoFile "$Name.cfg" -UseIWR).Content)}
                            Else                                                 {Throw [ApplicationException]::New('Unavailable. (Offline mode)')}
 
         If (!(Test-LoadOrderFormat $Content -ShowInfo -ContinueOnError)) {Throw 'Invalid load order data'}
@@ -1319,7 +1318,7 @@ Function Sync-Ets2ModRepo {
             Return [String[]]@($G__LoadOrder)
         }
 
-        [String[]]$LoadOrderList = (Get-ModRepoFile "$($G__RepositoryInfo.OrderRoot)$($G__RepositoryInfo.Orders)" -UseIWR).Content | ConvertFrom-JSON
+        [String[]]$LoadOrderList = (Get-ModRepoFile $G__RepositoryInfo.Orders -UseIWR).Content | ConvertFrom-JSON
 
         Write-Log INFO "Fetched available load orders ($($LoadOrderList.Count)) from master server"
 
@@ -1663,12 +1662,13 @@ Function Sync-Ets2ModRepo {
         Title       = "$G__GameName External Mod Manager"
         ShortTitle  = 'ETS2ExtModMan'
         Version     = "Version $G__ScriptVersion"
-        VersionDate = '2024.6.10'
+        VersionDate = '2024.6.20'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     [String[]]$G__UpdateNotes = @(
-        '- Server-side customization improvements.'
+        '- Improved file checks to further avoid unnecessary downloads.',
+        '- Minor text adjustments.'
     )
     [String[]]$G__KnownIssues = @()
 
@@ -1786,9 +1786,9 @@ Function Sync-Ets2ModRepo {
     If ($G__ValidateInstall) {
         Start-Process "steam://validate/$G__GameAppID"
         Write-Log INFO 'Started game file validation.'
-        Start-Sleep 2
-        Set-ForegroundWindow -Self
         Write-Host ' Started game file validation.'
+        Start-Sleep 1
+        Set-ForegroundWindow -Self
     }
 
     Update-ProtectedVars
@@ -1896,24 +1896,25 @@ Function Sync-Ets2ModRepo {
             }
         }
         If ($LocalMod.Version -lt $CurrentMod.Version -Or [Bool]$Repair) {
-            If ([IO.File]::Exists($CurrentMod.FileName)) {
-                [UInt64]$OriginalSize = Get-ItemPropertyValue $CurrentMod.FileName Length
-                Rename-Item $CurrentMod.FileName $OldFile @G__RI_RENGlobal
-            }
-            Else {[UInt64]$OriginalSize = 0}
-
             Try {
                 Write-HostX $XPos 'Preparing...'
                 If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {
                     If (Test-ModActive $CurrentMod.Name) {Throw [IO.IOException]::New("Close $G__GameName to update this mod.")}
 
                     Write-Log INFO "'$($CurrentMod.Name)': Downloading."
-                    [String]$Result, [UInt64]$NewSize = Get-ModRepoFile "$($G__RepositoryInfo.ModRoot)$($CurrentMod.FileName)" $XPos $Status
+
+                    If ([IO.File]::Exists($CurrentMod.FileName)) {
+                        [UInt64]$OriginalSize = Get-ItemPropertyValue $CurrentMod.FileName Length
+                        Rename-Item $CurrentMod.FileName $OldFile @G__RI_RENGlobal
+                    }
+                    Else {[UInt64]$OriginalSize = 0}
+
+                    [String]$Result, [UInt64]$NewSize = Get-ModRepoFile $CurrentMod.FileName $XPos $Status
 
                     If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
                     If ($Repair -eq 0 )              {Write-HostX $XPos 'Validating...'}
 
-                    If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {Throw 'Validation unsuccessful.'}
+                    If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {Throw 'Validation failed.'}
 
                     Switch ($Status) {
                         'Updating...'     {Write-HostX $XPos -Color Green "Updated        ($Result)" -Newline}
@@ -2060,3 +2061,4 @@ Function Sync-Ets2ModRepo {
         {$Null -ne $_} {& $PSCommandPath "$_"; Break}
     }
 }#>
+
