@@ -1,4 +1,4 @@
-#STR_version=3.5.2.4;
+#STR_version=3.5.2.5;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
@@ -30,6 +30,10 @@
     OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #>
+
+# TODO: Add cross-platform compatibility
+# TODO: Add core mod management (dll/injector mods)
+# TODO: Fix self-restart
 
 Param ([String]$InputParam)
 
@@ -222,7 +226,7 @@ Function Sync-Ets2ModRepo {
         [IO.Stream]$DownloadStream     = $Download.GetResponseStream()
         [IO.FileStream]$FileStream     = [IO.FileStream]::New($File, [IO.FileMode]::Create)
         
-        [UInt32]$BytesRead       = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
+        [UInt64]$BytesRead       = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
         [UInt64]$BytesDownloaded = $BytesRead
 
         [UInt32]$Unit, [String]$Symbol, [Byte]$Decimals = Switch ($DownloadSize) {
@@ -232,7 +236,7 @@ Function Sync-Ets2ModRepo {
         }
         [String]$ConvertedDownload = "$([Math]::Round($DownloadSize / $Unit, $Decimals)) $Symbol"
 
-        [UInt32]$IntervalBytes, [Double]$ConvertedBytes, [Double]$IntervalLength, [String]$TransferRate = 0, 0, 0, '0 kB/s'
+        [UInt64]$IntervalBytes, [Double]$ConvertedBytes, [Double]$IntervalLength, [String]$TransferRate = 0, 0, 0, '0 kB/s'
 
         While ($BytesRead -gt 0) {
             $FileStream.Write($Buffer, 0, $BytesRead)
@@ -1135,7 +1139,7 @@ Function Sync-Ets2ModRepo {
             [Parameter(ParameterSetName = 'Plural')][Alias('P')][Switch]$Pluralize
         )
 
-        If (!$G__PlrSvc) {Throw 'Pluralization service is not available'}
+        If (!$G__PlrSvc) {Throw 'Pluralization service is unavailable'}
 
         [String]$ParamSet = $PSCmdlet.ParameterSetName
         [String]$Plural   = $G__PlrSvc.Pluralize($Word)
@@ -1193,7 +1197,10 @@ Function Sync-Ets2ModRepo {
 
         [String[]]$EnabledFiles = ForEach ($Key in $G__LoadOrderData.Keys | Where-Object {$G__LoadOrderData[$_].Type -ne 'mod_workshop_package'}) {[IO.Path]::GetFileName($G__LoadOrderData[$Key].SourcePath)}
         [String[]]$Targets      = ForEach ($File in Get-ChildItem *.scs -File) {$OldSize += $File.Length; If ($File.Name -NotIn $EnabledFiles -And (($File.Name -In $G__OnlineData.PSObject.Properties.Name -And $G__DDSel -eq 1) -Or $G__DDSel -eq 2)) {$File.Name}}
-        [Byte]$TargetPadding    = ($Targets | Sort-Object Length)[-1].Length + 8
+
+        If (!$Targets) {Write-Host "`n No mods to delete."; Return}
+
+        [Byte]$TargetPadding = ($Targets | Sort-Object Length)[-1].Length + 8
 
         Write-Host "`n Deleting $($Targets.Count) inactive $(Switch-GrammaticalNumber 'mod' $Targets.Count):"
 
@@ -1662,13 +1669,13 @@ Function Sync-Ets2ModRepo {
         Title       = "$G__GameName External Mod Manager"
         ShortTitle  = 'ETS2ExtModMan'
         Version     = "Version $G__ScriptVersion"
-        VersionDate = '2024.6.20'
+        VersionDate = '2024.6.27'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     [String[]]$G__UpdateNotes = @(
-        '- Improved file checks to further avoid unnecessary downloads.',
-        '- Minor text adjustments.'
+        '- Fixed crash when opting to delete inactive managed mods but such mods were detected.',
+        '- Fixed crash upon downloading mods larger than 4 GB.'
     )
     [String[]]$G__KnownIssues = @()
 
