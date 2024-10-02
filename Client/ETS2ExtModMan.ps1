@@ -1,4 +1,4 @@
-#STR_version=3.5.2.5;
+#STR_version=3.5.3.0;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
@@ -1669,13 +1669,14 @@ Function Sync-Ets2ModRepo {
         Title       = "$G__GameName External Mod Manager"
         ShortTitle  = 'ETS2ExtModMan'
         Version     = "Version $G__ScriptVersion"
-        VersionDate = '2024.6.27'
+        VersionDate = '2024.10.2'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     [String[]]$G__UpdateNotes = @(
+        '- Added column displaying processed mods to total mod count.',
         '- Fixed crash when opting to delete inactive managed mods but such mods were detected.',
-        '- Fixed crash upon downloading mods larger than 4 GB.'
+        '- Improved support for larger downloads.'
     )
     [String[]]$G__KnownIssues = @()
 
@@ -1780,6 +1781,8 @@ Function Sync-Ets2ModRepo {
     [Byte]$Invalids             = 0
     [Byte]$Successes            = 0
     [Byte]$LongestName          = 3
+    [Byte]$TotalMods            = 0
+    [Byte]$ModCounter           = 0
     [Byte]$L_LongestVersion     = 9
     [Byte]$E_LongestVersion     = 7
     [Int64]$DownloadedData      = 0
@@ -1830,6 +1833,7 @@ Function Sync-Ets2ModRepo {
         }
     }
 
+    $TotalMods        = $G__OnlineData.PSObject.Properties.Value.Count
     $LongestName      = ($Names + $G__OnlineData.PSObject.Properties.Value.Name | Sort-Object Length)[-1].Length + 3
     $L_LongestVersion = ($Versions | Sort-Object Length)[-1].Length + 3
     $E_LongestVersion = (@('Current') + $G__OnlineData.PSObject.Properties.Value.VersionStr | Sort-Object Length)[-1].Length + 3
@@ -1841,17 +1845,21 @@ Function Sync-Ets2ModRepo {
     }
 
     Write-Host ("Active profile: $G__ActiveProfileName, load order: $G__LoadOrder".PadLeft([Console]::BufferWidth - 1) + "`n" + $G__ActiveProfile.PadLeft([Console]::BufferWidth - 1))
-    Write-Host (' ' + 'Mod'.PadRight($LongestName) + 'Installed'.PadRight($L_LongestVersion) + 'Current'.PadRight($E_LongestVersion) + 'Status')
+    Write-Host (' ' + 'No.'.PadRight(8) + 'Mod'.PadRight($LongestName) + 'Installed'.PadRight($L_LongestVersion) + 'Current'.PadRight($E_LongestVersion) + 'Status')
     Write-Host ($G__UILine * [Console]::BufferWidth)
 
     ForEach ($CurrentMod in $G__OnlineData.PSObject.Properties.Value) {
+
+        $ModCounter++
         
         $CurrentMod.Version  = [Version]$CurrentMod.Version
         [String]$OldFile     = 'old_' + $CurrentMod.FileName
         [Hashtable]$LocalMod = $LocalMods.($CurrentMod.Name)
         [Byte]$Repair        = 0 # 0: No repair   1: Entry   2: File
 
-        Write-Host -NoNewline (' ' + $CurrentMod.Title.PadRight($LongestName))
+        [String]$ModCountStr = "$ModCounter".PadLeft(2) + "/$TotalMods"
+
+        Write-Host -NoNewline (' ' + $ModCountStr.PadRight(8) + $CurrentMod.Title.PadRight($LongestName))
 
         [Byte]$StatusEval = ([Bool]$LocalMod.Version, [IO.File]::Exists($CurrentMod.FileName) | Group-Object | Where-Object {$_.Name -eq 'True'}).Count
         [String]$Status   = Switch ($StatusEval) {
@@ -2068,4 +2076,3 @@ Function Sync-Ets2ModRepo {
         {$Null -ne $_} {& $PSCommandPath "$_"; Break}
     }
 }#>
-
