@@ -1,4 +1,4 @@
-#STR_version=3.6.0;
+#STR_version=3.6.0.1;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
 #NUM_validate=0;
@@ -228,8 +228,7 @@ Function Sync-Ets2ModRepo {
         Trap {
             Write-Log ERROR "$($_.Exception.Message)"
 
-            Try {$FileStream.Flush()}       Catch {}
-            Try {$FileStream.Close()}       Catch {}
+            Try {$CryptoProvider.Dispose()} Catch {}
             Try {$FileStream.Dispose()}     Catch {}
             Try {$DownloadStream.Dispose()} Catch {}
             Try {$HttpClient.Dispose()}     Catch {}
@@ -260,6 +259,18 @@ Function Sync-Ets2ModRepo {
 
         [UInt64]$DownloadSize = $RepoResponse.Content.Headers.ContentLength
 
+        [UInt32]$BufferSize = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min($DownloadSize, [GC]::GetTotalMemory($False) / 10), 2)))
+        [Byte[]]$Buffer     = [Byte[]]::New($BufferSize)
+
+        [Security.Cryptography.SHA1CryptoServiceProvider]$CryptoProvider = [Security.Cryptography.SHA1CryptoServiceProvider]::New()
+        
+        [DateTime]$IntervalStart   = (Get-Date).AddSeconds(-1)
+        [IO.Stream]$DownloadStream = $RepoResponse.Content.ReadAsStreamAsync().Result
+        [IO.FileStream]$FileStream = [IO.FileStream]::New($File, [IO.FileMode]::Create)
+
+        [UInt64]$BytesRead       = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
+        [UInt64]$BytesDownloaded = $BytesRead
+
         [UInt32]$Unit, [String]$Symbol, [Byte]$Decimals = Switch ($DownloadSize) {
             {$_ -lt 1000kB} {1kB, 'kB', 0; Break}
             {$_ -lt 1000MB} {1MB, 'MB', 0; Break}
@@ -268,23 +279,11 @@ Function Sync-Ets2ModRepo {
         [String]$ConvertedDownload = "$([Math]::Round($DownloadSize / $Unit, $Decimals)) $Symbol"
         [UInt64]$IntervalBytes, [Double]$ConvertedBytes, [Double]$IntervalLength, [String]$TransferRate = 0, 0, 0, '0 kB/s'
 
-        [UInt32]$BufferSize = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min($DownloadSize, [GC]::GetTotalMemory($False) / 10), 2)))
-        [Byte[]]$Buffer     = [Byte[]]::New($BufferSize)
-
-        [Security.Cryptography.SHA1CryptoServiceProvider]$CryptoProvider = [Security.Cryptography.SHA1CryptoServiceProvider]::New()
-        
-        [IO.Stream]$DownloadStream = $RepoResponse.Content.ReadAsStreamAsync().Result
-        [IO.FileStream]$FileStream = [IO.FileStream]::New($File, [IO.FileMode]::Create)
-
-        [DateTime]$IntervalStart = (Get-Date).AddSeconds(-1)
-        [UInt64]$BytesRead       = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
-        [UInt64]$BytesDownloaded = $BytesRead
-
         While ($BytesRead -gt 0) {
 
             $FileStream.Write($Buffer, 0, $BytesRead)
 
-            $CryptoProvider.TransformBlock($Buffer, 0, $BytesRead, $Null, $Null)
+            [Void]$CryptoProvider.TransformBlock($Buffer, 0, $BytesRead, $Null, $Null)
             
             $BytesRead        = $DownloadStream.Read($Buffer, 0, $Buffer.Length)
             $BytesDownloaded += $BytesRead
@@ -302,19 +301,17 @@ Function Sync-Ets2ModRepo {
 
         If ($BytesDownloaded -eq 0) {Throw "Download failed: BD=$BytesDownloaded,BR=$BytesRead,DS=$DownloadSize,BS=$BufferSize"}
 
-        $CryptoProvider.TransformFinalBlock($Buffer, 0, 0)
-        $FileHash = [BitConverter]::ToString($CryptoProvider.Hash) -Replace '-', ''
+        [Void]$CryptoProvider.TransformFinalBlock($Buffer, 0, 0)
+        [String]$FileHash = [BitConverter]::ToString($CryptoProvider.Hash) -Replace '-', ''
+
+        If ('Hash' -In $PSBoundParameters.Keys -And $FileHash -ne $Hash) {Throw "Download failed: Hash mismatch"}
+
         $CryptoProvider.Dispose()
-
-        If ('FileHash' -In $PSBoundParameters.Keys -And $FileHash -ne $Hash) {Throw "Download failed: Hash mismatch"}
-
-        $FileStream.Flush()
-        $FileStream.Close()
         $FileStream.Dispose()
         $DownloadStream.Dispose()
         $HttpClient.Dispose()
-
-        Return "$ConvertedDownload", $BytesDownloaded, $FileHash
+        
+        Return $ConvertedDownload, $BytesDownloaded, $FileHash
     }
 
     Function Test-PSHostCompatibility {Return $Host.UI.SupportsVirtualTerminal}
@@ -350,10 +347,7 @@ Function Sync-Ets2ModRepo {
 
         Try     {Return [BitConverter]::ToString($G__CryptoProvider.ComputeHash($Stream)) -Replace '-', '' -eq $Hash}
         Catch   {Return $False}
-        Finally {
-            $Stream.Close()
-            $Stream.Dispose()
-        }
+        Finally {$Stream.Dispose()}
     }
 
     Function Test-ArrayNullOrEmpty {
@@ -374,11 +368,9 @@ Function Sync-Ets2ModRepo {
 
         ForEach ($Line in Get-UTF8Content $ConfigPath) {
             If ($Line -NotMatch '^uset ') {Continue}
-            
             $Line = $Line -Replace '(?<=^)uset (?=.*$)', ''
             [String]$Name, [String]$Value = $Line -Replace '"', '' -Split ' ', 2
-
-            $ConfigData[$Name] = $Value
+            $ConfigData[$Name]            = $Value
         }
     }
     
@@ -466,14 +458,12 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory, ParameterSetName = 'PID')][UInt32]$ID
         )
 
-        [__ComObject]$WShell = New-Object -COM WScript.Shell
-        
+        [__ComObject]$WShell                = New-Object -COM WScript.Shell
         [UInt32]$TargetPID, [IntPtr]$Handle = Switch ($PSCmdlet.ParameterSetName) {
             'Self' {$PID, (Get-Process -Id $PID)[0].MainWindowHandle}
             'Name' {(Get-Process $Name)[0] | ForEach-Object {$_.Id, $_.MainWindowHandle}}
             'PID'  {$ID, (Get-Process -Id $ID)[0].MainWindowHandle}
         }
-
         [Void]$WShell.AppActivate($TargetPID)
         [Void][WndHelper]::SetForegroundWindow($Handle)
     }
@@ -487,7 +477,6 @@ Function Sync-Ets2ModRepo {
         )
 
         [String]$Type, [String]$Hex = $Name -Split '\.', 2
-
         If ($ModType.IsPresent)                 {Return $Type}
         If ([String]::IsNullOrWhiteSpace($Hex)) {Return ($Name, "$G__GameModDirectory\$Name.scs")[$AsPath.IsPresent]}
 
@@ -538,12 +527,10 @@ Function Sync-Ets2ModRepo {
         [String]$RegKey        = 'HKLM:\SOFTWARE' + ('\', '\WOW6432Node\')[[Environment]::Is64BitOperatingSystem] + 'Valve\Steam'
         [String]$SteamRoot     = Get-ItemPropertyValue $RegKey InstallPath
         [String[]]$LibraryData = Get-UTF8Content "$SteamRoot\SteamApps\libraryfolders.vdf"
-
-        [String]$SteamApps = ForEach ($Line in $LibraryData) {
+        [String]$SteamApps     = ForEach ($Line in $LibraryData) {
             If ($Line -Match $PathSearchPattern)  {[String]$Path = $Matches[0] -Replace '\\\\', '\'; Continue}
             If ($Line -Match $AppIDSearchPattern) {"$Path\SteamApps"; Break}
         }
-
         # If $Directory is 'Workshop', return the workshop directory
         If ($Directory -eq 'Workshop') {Return "$SteamApps\workshop\content\$G__GameAppID"}
 
@@ -600,9 +587,8 @@ Function Sync-Ets2ModRepo {
         ForEach ($Entry in $Data) {
             If ($Entry -Match '^ active_mods: \d+$') {Continue}
 
-            [String]$Priority              = Switch (($Entry -Split '\[|\]', 3)[1]) {{$_ -As [UInt16] -eq $_} {$_} Default {Continue}}
-            [String]$Source, [String]$Name = Switch ((($Entry -Split '\[\d+\]: ', 2)[-1] -Split '\|', 2).Trim('"')) {{$_ -As [String[]] -eq $_} {$_}}
-
+            [String]$Priority               = Switch (($Entry -Split '\[|\]', 3)[1]) {{$_ -As [UInt16] -eq $_} {$_} Default {Continue}}
+            [String]$Source, [String]$Name  = Switch ((($Entry -Split '\[\d+\]: ', 2)[-1] -Split '\|', 2).Trim('"')) {{$_ -As [String[]] -eq $_} {$_}}
             $ParsedData["active_$Priority"] = [Hashtable]@{
                 Name       = $Name
                 Type       = Convert-ModSourceName -Name $Source -ModType
@@ -668,12 +654,10 @@ Function Sync-Ets2ModRepo {
         }
 
         [String[]]$ProfileMods, [String[]]$ProfileData = Read-PlainTextProfileUnit All -Direct:($ProfileFormat -eq 'Text')
-
-        [String]$RawProfileMods   = $ProfileMods -Join "`n"
-        [UInt16]$ProfileModsCount = ($ProfileMods[0] -Split ':', 2)[-1].Trim()
+        [String]$RawProfileMods                        = $ProfileMods -Join "`n"
+        [UInt16]$ProfileModsCount                      = ($ProfileMods[0] -Split ':', 2)[-1].Trim()
 
         If ($RawProfileMods -cne $G__LoadOrderText) {
-            
             Write-Host -NoNewline (''.PadRight(4) + 'Creating profile backup...'.PadRight(35))
             
             [String]$Backup = Backup-ProfileUnit
@@ -693,7 +677,6 @@ Function Sync-Ets2ModRepo {
             Write-Host -ForegroundColor Green '    Already applied'
         }
         [String[]]$MissingWorkshopMods = ForEach ($Key in $G__LoadOrderData.Keys | Where-Object {$G__LoadOrderData[$_].Type -eq 'mod_workshop_package'}) {
-            
             [Hashtable]$Current = $G__LoadOrderData[$Key]
             If (!(Test-WorkshopModInstalled $Current.Source)) {
 
@@ -779,7 +762,6 @@ Function Sync-Ets2ModRepo {
         Param ()
 
         [String]$InFile = Get-FilePathByDialog 'Import load order' 'Load order file (*.order)|*.order|All files (*.*)|*.*'
-
         Clear-Host
 
         If ($InFile) {Return $InFile} Else {Return $G__LoadOrder}
@@ -796,7 +778,6 @@ Function Sync-Ets2ModRepo {
         Write-Host ($G__UILine * [Console]::BufferWidth)
 
         If (!$AllProfiles) {Throw 'No profiles detected! Disable ''Use Steam Cloud'' for the profile(s) you want to use.'}
-
         If ($AllProfiles.Count -eq 1) {
             Set-ActiveProfile $AllProfiles[0]
 
@@ -813,11 +794,9 @@ Function Sync-Ets2ModRepo {
 
         Do {
             $Host.UI.RawUI.CursorPosition = $StartPos
-
-            [Byte]$Iteration = 0
+            [Byte]$Iteration              = 0
 
             ForEach ($Directory in $AllProfiles) {
-
                 [String]$Name     = Convert-ProfileFolderName $Directory
                 [Bool]$IsSelected = $Iteration -eq $Selected
 
@@ -889,9 +868,7 @@ Function Sync-Ets2ModRepo {
         Param ([Parameter(Mandatory)][String]$Directory)
 
         If ($Directory -ne $G__ActiveProfile) {
-            
             Write-EmbeddedValue $G__DataIndices.ActiveProfile $Directory
-
             Write-Log INFO "Active profile changed from '$G__ActiveProfile' to '$Directory'. Executing script restart."
 
             $GLOBAL:G__ScriptRestart = $True
@@ -904,11 +881,9 @@ Function Sync-Ets2ModRepo {
         Param ([Parameter(Mandatory)][String]$Uri)
 
         [String]$BrowserName = (Get-ItemProperty HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice).ProgId
-
         If ($BrowserName -eq 'AppXq0fevzme2pys62n3e0fbqa7peapykr8v') {Start-Process Microsoft-Edge:$Uri}
         Else {
             [Void](New-PSDrive HKCR Registry HKEY_CLASSES_ROOT -Scope GLOBAL -ErrorAction SilentlyContinue)
-
             [String]$BrowserPath = [Regex]::Match((Get-ItemProperty HKCR:\$BrowserName\shell\open\command).'(default)', '\".+?\"')
 
             Start-Process $BrowserPath $Uri
@@ -962,7 +937,6 @@ Function Sync-Ets2ModRepo {
         }
 
         [Byte]$ActiveDataPadding = ("Active $G__GameNameShort profile: ", 'Active load order: ' | Sort-Object Length)[-1].Length
-
         [Console]::SetCursorPosition(0, 0)
 
         Write-Host "`n    $($G__ScriptDetails['Title'])   $G__ScriptVersion`n"
@@ -1101,9 +1075,7 @@ Function Sync-Ets2ModRepo {
             ForegroundColor = [Console]::ForegroundColor
             BackgroundColor = [Console]::BackgroundColor
         }
-
         [Console]::SetCursorPosition(0, $From)
-
         For ([UInt16]$Y = 0; $Y -lt $Lines - 1; $Y++) {
             Write-Host @Splat
             Start-Sleep -Milliseconds $Speed
@@ -1115,8 +1087,7 @@ Function Sync-Ets2ModRepo {
         [CmdletBinding()]
         Param ([Parameter(Mandatory)][UInt32]$Index, [String[]]$CustomData)
         
-        [String[]]$ScriptData = If ($CustomData) {$CustomData} Else {Get-UTF8Content $G__ScriptPath}
-
+        [String[]]$ScriptData              = If ($CustomData) {$CustomData} Else {Get-UTF8Content $G__ScriptPath}
         [String]$Info,   [String]$RawValue = $ScriptData[$Index].Substring(0, $ScriptData[$Index].IndexOf(';')).Substring(1) -Split '=', 2
         [String]$Format, [String]$Name     = $Info -Split '_', 2
 
@@ -1163,7 +1134,6 @@ Function Sync-Ets2ModRepo {
         [String[]]$ScriptData = Get-UTF8Content $G__ScriptPath
 
         ForEach ($Key in $G__DataIndices.Keys) {
-
             [String]$Value = Get-Variable "G__$Key" -ValueOnly
             [UInt32]$Index = $G__DataIndices.$Key
 
@@ -1218,7 +1188,6 @@ Function Sync-Ets2ModRepo {
                            Else                                                 {Throw [ApplicationException]::New('Unavailable. (Offline mode)')}
 
         If (!(Test-LoadOrderFormat $Content -ShowInfo -ContinueOnError)) {Throw 'Invalid load order data'}
-        
         [Hashtable]$LoadOrderData = Get-ModData $Content
 
         If     ($Data.IsPresent -And $Raw.IsPresent)  {Return $LoadOrderData, $Content}
@@ -1232,7 +1201,6 @@ Function Sync-Ets2ModRepo {
         Param ()
 
         [UInt16]$DeletedTargets, [UInt64]$OldSize = 0, 0
-
         [String[]]$EnabledFiles = ForEach ($Key in $G__LoadOrderData.Keys | Where-Object {$G__LoadOrderData[$_].Type -ne 'mod_workshop_package'}) {[IO.Path]::GetFileName($G__LoadOrderData[$Key].SourcePath)}
         [String[]]$Targets      = ForEach ($File in Get-ChildItem *.scs -File) {$OldSize += $File.Length; If ($File.Name -NotIn $EnabledFiles -And (($File.Name -In $G__OnlineData.PSObject.Properties.Name -And $G__DDSel -eq 1) -Or $G__DDSel -eq 2)) {$File.Name}}
 
@@ -1243,7 +1211,6 @@ Function Sync-Ets2ModRepo {
         Write-Host "`n Deleting $($Targets.Count) inactive $(Switch-GrammaticalNumber 'mod' $Targets.Count):"
 
         ForEach ($Target in $Targets) {
-
             Write-Host -NoNewline ('    ' + "'$Target'...".PadRight($TargetPadding))
             
             Try {
@@ -1258,16 +1225,13 @@ Function Sync-Ets2ModRepo {
                 Write-Host -ForegroundColor Red 'Failed to delete'
             }
         }
-
         [String]$DeletionResult = Switch ($OldSize - (Get-ItemPropertyValue *.scs Length | Measure-Object -Sum).Sum) {
             {[Math]::Abs($_) -lt 1024}   {"$_ B"; Break}
             {[Math]::Abs($_) -lt 1024kB} {"$([Math]::Round($_ / 1kB, 1)) kB"; Break}
             {[Math]::Abs($_) -lt 1024MB} {"$([Math]::Round($_ / 1MB, 1)) MB"; Break}
             {[Math]::Abs($_) -ge 1024MB} {"$([Math]::Round($_ / 1GB, 2)) GB"; Break}
         }
-
         $DeletionResult = "Deleted $DeletedTargets inactive $(Switch-GrammaticalNumber 'mod' $DeletedTargets) ($DeletionResult)"
-
         Write-Log INFO $DeletionResult
         Write-Host -ForegroundColor Green " $DeletionResult"
     }
@@ -1344,7 +1308,6 @@ Function Sync-Ets2ModRepo {
 
         If ($LoadOrder -ne $G__LoadOrder) {
             Write-EmbeddedValue $G__DataIndices.LoadOrder $LoadOrder
-
             Write-Log INFO "Active load order changed from '$G__LoadOrder' to '$LoadOrder'"
 
             Return $LoadOrder
@@ -1361,7 +1324,6 @@ Function Sync-Ets2ModRepo {
             Return [String[]]@($G__LoadOrder)
         }
         [String[]]$LoadOrderList = (Get-ModRepoFile $G__RepositoryInfo.Orders -UseIWR).Content | ConvertFrom-JSON
-
         Write-Log INFO "Fetched available load orders ($($LoadOrderList.Count)) from master server"
 
         Return $LoadOrderList
@@ -1502,7 +1464,6 @@ Function Sync-Ets2ModRepo {
 
         If ([String]::IsNullOrWhiteSpace($Target))         {Return $RootName}
         If ([IO.Path]::GetFileName($Target) -eq $RootName) {Return $RootName}
-
         Try {
             Rename-Item $Target $RootName
             Write-Log INFO "Renamed '$Target' to '$RootName'"
@@ -1695,6 +1656,10 @@ Function Sync-Ets2ModRepo {
         Contact     = 'Discord - @realtam'
     }
     [String[]]$G__UpdateNotes = @(
+        '3.6.0.1 (Hotfix)',
+        '- Fixed repository downloader function returning incorrect data.',
+        '',
+        '3.6.0',
         '- Added functionality for the manager to automatically move itself to the mod directory if misplaced.',
         '- Added first-time repository URL prompt to the startup process.',
         '- Added support for HTTPS/SSL repositories.',
@@ -1712,7 +1677,6 @@ Function Sync-Ets2ModRepo {
     . $G__EXEC_RESTART
 
     If (!$Updated) {
-
         [Byte]$Padding = 15
 
         Clear-Host
@@ -1726,9 +1690,8 @@ Function Sync-Ets2ModRepo {
             [String[]]$UpdateContent = Get-UTF8Content -Bytes $UpdateBytes
 
             ForEach ($Key in $G__DataIndices.Keys) {
-                [String]$Value = Get-Variable "G__$Key" -ValueOnly
-                [UInt32]$Index = $G__DataIndices.$Key
-
+                [String]$Value         = Get-Variable "G__$Key" -ValueOnly
+                [UInt32]$Index         = $G__DataIndices.$Key
                 $UpdateContent[$Index] = New-EmbeddedValue $UpdateContent[$Index] $Value
             }
 
@@ -1790,11 +1753,9 @@ Function Sync-Ets2ModRepo {
     Write-Host ($G__UILine * [Console]::BufferWidth)
 
     If ($G__NoUpdate) {
-
         Edit-ProfileLoadOrder
 
         Write-Host -ForegroundColor Green "`n Done`n"
-
         Wait-KeyPress
         Unprotect-Variables
 
@@ -1952,10 +1913,6 @@ Function Sync-Ets2ModRepo {
 
                     [String]$Result, [UInt64]$NewSize, [String]$NewHash = Get-ModRepoFile $CurrentMod.FileName $XPos $Status $CurrentMod.Hash
 
-                    #If ($Repair -eq 0 ) {Write-HostX $XPos 'Validating...'}
-
-                    #If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {Throw 'Validation failed.'}
-
                     If ([IO.File]::Exists($OldFile)) {Remove-Item $OldFile -Force}
 
                     Switch ($Status) {
@@ -1973,7 +1930,6 @@ Function Sync-Ets2ModRepo {
 
                 $NewVersions    += ($CurrentMod.Name, $CurrentMod.VersionStr) -Join '='
                 $DownloadedData += $NewSize - $OriginalSize
-
                 $Successes++
             }
             Catch {
@@ -1984,7 +1940,6 @@ Function Sync-Ets2ModRepo {
                 If ([IO.File]::Exists($OldFile))             {Rename-Item $OldFile $CurrentMod.FileName @G__RI_RENGlobal}
 
                 $NewVersions += ($CurrentMod.Name, $LocalMod.VersionStr) -Join '='
-
                 $Failures++
 
                 Write-HostX $XPos -Color Red ('Failed: ' + (Format-AndExportErrorData $_)) -Newline
@@ -1992,7 +1947,6 @@ Function Sync-Ets2ModRepo {
         }
     }
     If (![IO.Directory]::Exists($G__TSSETool.RootDirectory)) {
-
         Write-Host -NoNewline (' ' + $G__TSSETool.Name.PadRight($LongestName) + '---'.PadRight($L_LongestVersion))
         Write-Host -NoNewline -ForegroundColor Green '---'.PadRight($E_LongestVersion)
 
@@ -2021,7 +1975,6 @@ Function Sync-Ets2ModRepo {
             $Failures++
 
             Write-Log ERROR "'$($G__TSSETool.Name)': Failed - $($_.Exception.Message)"
-
             Write-Host -ForegroundColor Red 'Failed              '
         }
     }
