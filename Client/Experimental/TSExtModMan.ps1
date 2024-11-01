@@ -10,7 +10,7 @@
 #STR_offlinedata={};
 #NUM_logretention=0;
 #NUM_experimental=1;
-#STR_targetgame=ETS;
+#STR_targetgame=;
 #NUM_autobackup=1;
 
 #***GAME_PROFILE_PLACEHOLDER***
@@ -216,7 +216,7 @@ Function Sync-Ets2ModRepo {
                         $Length += $Offset; $Offset = 0
                     }
                 
-                    [Byte[]]$Buffer = [Byte[]]::New($Count)
+                    [Byte[]]$Buffer        = [Byte[]]::New($Count)
                     [IO.FileStream]$Stream = [IO.File]::OpenRead($Path.FullName)
                     [Void]$Stream.Read($Buffer, $Offset, $Count)
                     $Stream.Dispose()
@@ -279,7 +279,7 @@ Function Sync-Ets2ModRepo {
         )
 
         If (!$NoLog.IsPresent) {Write-Log INFO "Received data write request for '$($Path.FullName)'."}
-        
+
         [Text.UTF8Encoding]$UTF8 = [Text.UTF8Encoding]::New($False)
         [String]$JoinedString    = $String -Join "`n"
         If (!$NoNewline.IsPresent) {$JoinedString += "`n"}
@@ -2156,7 +2156,7 @@ Function Sync-Ets2ModRepo {
 
         If ($PSBoundParameters.ContainsKey('Assemblies')) {
             ForEach ($Assembly in $Assemblies) {
-                Write-Host -NoNewline "$($T__Tab * 5)Assembly: $Assembly...".PadRight($LongestTypeName)
+                Write-Host -NoNewline (($T__Tab * 5) + "Assembly: $Assembly...".PadRight($LongestTypeName))
                 Add-Type -Assembly $Assembly
                 Write-Host -ForegroundColor Green 'OK'
             }
@@ -2165,7 +2165,7 @@ Function Sync-Ets2ModRepo {
 
         If ($PSBoundParameters.ContainsKey('TypeDefinitions')) {
             ForEach ($TypeName in $TypeNames) {
-                Write-Host -NoNewline "$($T__Tab * 5)$TypeName...".PadRight($LongestTypeName)
+                Write-Host -NoNewline (($T__Tab * 5) + "$TypeName...".PadRight($LongestTypeName))
                 Write-Host -ForegroundColor Green 'OK'
             }
             ForEach ($TypeDef in $TypeDefinitions) {Add-Type -Language CSharp -TypeDefinition $TypeDef}
@@ -2185,6 +2185,7 @@ Function Sync-Ets2ModRepo {
     $ErrorActionPreference = [Management.Automation.ActionPreference]::Stop
     $ProgressPreference    = [Management.Automation.ActionPreference]::SilentlyContinue
 
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::TLS12
     [CultureInfo]$G__CurrentCulture             = Get-EnglishCulture -Set
     [Globalization.TextInfo]$G__CultureTextInfo = $G__CurrentCulture.TextInfo
 
@@ -2462,10 +2463,12 @@ Function Sync-Ets2ModRepo {
         '- Added internal support for experimental versions.',
         '- Added option to set retention time or toggle deletion of old logs.',
         '- Added option to toggle automatic profile backups.',
-        '- Fixed text collision between the Repository URL prompt and loading screen information.',
+        '- Fixed text collision between Repository URL prompt and loading screen information.',
         '- Fixed first time profile selection menu starting while the script was still loading.',
         '- Fixed crash when selecting "Import load order" from the main menu.',
         '- Fixed uncommanded menu selections due to input buffering outside active prompts.',
+        '- Fixed repository downloader not supporting HTTPS in UseIWR mode.',
+        '- Fixed TLS 1.2 not being enforced for repository communication.',
         '- Improved overall script performance.',
         '- Improved appearance of the Repository URL prompt.',
         '- Improved type definition and assembly importing.',
@@ -2633,7 +2636,8 @@ Function Sync-Ets2ModRepo {
 
     Write-Log INFO 'ModUpdateInit : Preparing mod update routine.'
 
-    [PSObject]$G__OnlineData    = [PSObject]::New()
+    [PSObject]$G__OnlineData = [PSObject]::New()
+
     [Byte]$Failures             = 0
     [Byte]$Invalids             = 0
     [Byte]$Successes            = 0
