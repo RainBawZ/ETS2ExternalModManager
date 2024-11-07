@@ -9,9 +9,10 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=1;
-#STR_targetgame=;
+#NUM_experimental=21;
+#STR_targetgame=_;
 #NUM_autobackup=1;
+#PERSIST_END
 
 #***GAME_PROFILE_PLACEHOLDER***
 
@@ -42,64 +43,88 @@
 
 Param (
     [Parameter(Position = 0)][String]$InputParam,
-    [ValidateSet('', 'ETS', 'ATS')][String]$_Game = ''
+    [ValidateSet('ETS2', 'ATS')][String]$_Game
 )
+
+$G__OS = If ($Env:OS -Match 'Windows') {'Windows'} Else {'Linux'}
 
 If (!$PSBoundParameters.ContainsKey('InputParam')) {
     [DateTime]$T__LoadTime = [DateTime]::Now
     [String]$G__SessionID  = (Get-FileHash -InputStream ([IO.MemoryStream]::New([Byte[]][Char[]]$T__LoadTime.ToString())) -Algorithm MD5).Hash.Substring(0, 8)
+    $T__Message            = ' ' * [Math]::Max(0, [Math]::Floor(($Host.UI.RawUI.WindowSize.Width - $T__Message.Length) / 2) - $T__SessionStr.Length) + $T__Message
+    [String]$T__Game       = $_Game
+
+    If ($T__Game -NotIn 'ETS2', 'ATS') {
+        [Collections.Generic.List[String]]$T__Data  = @()
+        [Threading.CancellationTokenSource]$T__TSrc = [Threading.CancellationTokenSource]::New()
+        [Collections.Generic.IAsyncEnumerable[String]]$T__Enm  = [IO.File]::ReadLinesAsync($PSCommandPath, $T__TSrc.Token)
+        [Collections.Generic.IAsyncEnumerator[String]]$T__Feed = $T__Enm.GetAsyncEnumerator($T__TSrc.Token)
+        Try {While ($T__Feed.MoveNextAsync().AsTask().Result -And !$T__TSrc.IsCancellationRequested) {
+            If ($T__Feed.Current -eq '#PERSIST_END') {$T__TSrc.Cancel(); Break}
+            Else                                     {$T__Data.Add($T__Feed.Current)} 
+        }}
+        Catch {[Collections.Generic.List[String]]$T__Data = @('#STR_targetgame=XXXX;')}
+        Finally {
+            If ($Null -ne $T__Feed) {[Void]$T__Feed.DisposeAsync()}
+            If ($Null -ne $T__TSrc) {[Void]$T__TSrc.Dispose()}
+            Remove-Variable T__TSrc, T__Enm, T__Feed -EA 0
+        }
+        Switch (($T__Data | Where-Object {$_ -Match '^#STR_targetgame=\w+;$'}) | ForEach-Object {[Regex]::Match($_, '(?<=^#STR_targetgame=)\w+(?=;$)').Value}) {
+            {$_ -In 'ETS2', 'ATS'} {[String]$T__Game = $_; Break}
+            Default {
+                [String]$T__OSDependentPattern = ('(?<=\\Documents\\)[ \w]+(?=\\?)', '(?<=\/home\/)[ \w]+(?=\/?)')[$G__OS -eq 'Linux']
+                [String]$T__Game = ([Regex]::Match($PSScriptRoot, $T__OSDependentPattern).Value -Split ' ' | ForEach-Object {$_[0]}) -Join ''
+                If ($T__Game -NotIn 'ETS2', 'ATS') {
+                    Try {[Console]::CursorVisible = $True} Catch {}
+                    Write-Host -NoNewline -ForegroundColor Red 'Failed to auto-detect sim name. '
+                    Write-Host -NoNewline 'Select manually [0: ETS2 | 1: ATS | ESC: Exit]'
+                    $Host.UI.RawUI.FlushInputBuffer()
+                    Do {
+                        If ($Null -ne $T__In) {[Console]::Beep(700, 250)}
+                        [Byte]$T__In = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
+                        If ($T__In -eq 27) {Exit}
+                    } Until ($T__In -In [Byte[]][Char[]]'01')
+                    Clear-Host
+                    [String]$T__Game = ('ETS2', 'ATS')[$T__In - 48]
+                    Break
+                }
+            }
+        }
+    }
+    [String]$T__Tab        = ' ' * 4
     [String]$T__Message    = '. . .  L O A D I N G  . . .'
     [String]$T__SessionStr = " Session ID: $G__SessionID"
+    [String]$T__GameMode   = "Targeting: $T__Game "
     $T__Message            = ' ' * [Math]::Max(0, [Math]::Floor(($Host.UI.RawUI.WindowSize.Width - $T__Message.Length) / 2) - $T__SessionStr.Length) + $T__Message
-    
-    If     ($_Game) {[String]$T__Game = $_Game}
-    ElseIf ($T__Game -NotIn 'ETS', 'ATS') {
-        Try {Switch (((Get-Content $PSCommandPath -TotalCount 14)[-1] -Split '=', 2)[1].SubString(0, 3)) {
-            {$_ -In 'ETS', 'ATS'} {[String]$T__Game = $_; Break}
-            Default               {Throw}
-        }}
-        Catch {Switch ([Regex]::Match($PSScriptRoot, '(?<=Documents\\)(Euro|American) Truck Simulator( 2)?(?=\\?)').Value) {
-            'Euro Truck Simulator 2'   {[String]$T__Game = 'ETS'; Break}
-            'American Truck Simulator' {[String]$T__Game = 'ATS'; Break}
-            Default {
-                While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)}
-                Try {[Console]::CursorVisible = $False} Catch {}
-                Write-Host -NoNewline -ForegroundColor Red 'Failed to auto-detect sim name. '
-                Write-Host -NoNewline 'Select manually [0: ETS | 1: ATS | ESC: Exit]'
-                Do {
-                    If ($Null -ne $T__In) {[Console]::Beep(700, 250)}
-                    [Byte]$T__In = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
-                    If ($T__In -eq 27) {Exit}
-                } Until ($T__In -In [Byte[]][Char[]]'01')
-                Clear-Host
-                [String]$T__Game = ('ETS', 'ATS')[$T__In - 48]
-                Break
-            }
-        }}
-    }
-    [String]$T__Tab           = ' ' * 4
-    [Hashtable]$T__LoadSplatA = @{
+    [Hashtable]$T__LoadSplat_Session = @{
         Object          = "`n$T__SessionStr"
         ForegroundColor = [ConsoleColor]::DarkGray
         BackgroundColor = [ConsoleColor]::DarkBlue
         NoNewline       = $True
     }
-    [Hashtable]$T__LoadSplatB = @{
-        Object          = ($T__Message + (' ' * ($Host.UI.RawUI.BufferSize.Width - $T__Message.Length - $T__SessionStr.Length)))
+    [Hashtable]$T__LoadSplat_Message = @{
+        Object          = "$T__Message$(' ' * ($Host.UI.RawUI.BufferSize.Width - $T__Message.Length - $T__SessionStr.Length - $T__GameMode.Length))"
         ForegroundColor = [ConsoleColor]::White
+        BackgroundColor = [ConsoleColor]::DarkBlue
+        NoNewline       = $True
+    }
+    [Hashtable]$T__LoadSplat_Target = @{
+        Object          = $T__GameMode
+        ForegroundColor = [ConsoleColor]::DarkGray
         BackgroundColor = [ConsoleColor]::DarkBlue
         NoNewline       = $True
     }
 
     Try {[Console]::CursorVisible = $False} Catch {}
 
-    Write-Host @T__LoadSplatA
-    Write-Host @T__LoadSplatB
+    Write-Host @T__LoadSplat_Session
+    Write-Host @T__LoadSplat_Message
+    Write-Host @T__LoadSplat_Target
 
     Write-Host -NoNewline "`n`n$($T__Tab * 3)Loading functions... "
 
     [DateTime]$T__Step = [DateTime]::Now
-    Remove-Variable T__Message, T__SessionStr, T__In, T__LoadSplatA, T__LoadSplatB, _Game -EA 0
+    Remove-Variable T__Message, T__SessionStr, T__GameMode, T__Data, T__OSDependentPattern, T__In, T__LoadSplat_Session, T__LoadSplat_Message, T__LoadSplat_Target, _Game -EA 0
 }
 
 Function Sync-Ets2ModRepo {
@@ -153,14 +178,17 @@ Function Sync-Ets2ModRepo {
         [CmdletBinding()]
         Param ([Parameter(Position = 0)][String]$Prompt)
 
-        Write-Log INFO 'Clearing input buffer...'
-        While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)}
-        Write-Log INFO 'Input buffer cleared.'
+        $Host.UI.RawUI.FlushInputBuffer()
+        Write-Log INFO 'Flushed input buffer.'
+
+        [Console]::CursorVisible = $True
 
         Write-Log INFO 'Awaiting user input...'
-        [String]$UserInput       = If ($Prompt) {Read-Host $Prompt} Else {Read-Host}
-        [Console]::CursorVisible = $False
+        [String]$UserInput = If ($Prompt) {Read-Host $Prompt} Else {Read-Host}
+
         Write-Log INFO "User input received: '$UserInput'"
+        
+        [Console]::CursorVisible = $False
 
         Return $UserInput
     }
@@ -296,12 +324,12 @@ Function Sync-Ets2ModRepo {
         [CmdletBinding()]
         Param ([Parameter(Mandatory)][Management.Automation.ErrorRecord]$Exception)
 
-        [String]$Timestamp = [DateTime]::Now.ToString('yyyy.MM.dd AT HH:mm:ss')
+        [String]$Timestamp = [DateTime]::Now.ToString('yyyy.MM.dd AT HH:mm:ss.fff')
         [String]$Message   = $Exception.Exception.Message
         [String]$Details   = $Exception.ErrorDetails.Message
 
         [String[]]$LogData = @(
-            "FATAL ERROR ON $Timestamp RUNNING VERSION $G__ScriptVersion :",
+            "[$Timestamp] FATAL ERROR",
             "$($Exception.PSObject.Properties.Value -Join "`n")",
             "$('-' * 100)"
         )
@@ -317,15 +345,13 @@ Function Sync-Ets2ModRepo {
             [Parameter(Position = 1)][String]$Message = ''
         )
 
-        [System.Management.Automation.CallStackFrame[]]$CallStack = Get-PSCallStack
+        [String]$EntryPrefix = "[$([DateTime]::Now.ToString('yyyy.MM.dd HH:mm:ss.fff'))] " + $Type.PadRight(6) + ': '
+
+        [Management.Automation.CallStackFrame[]]$CallStack = Get-PSCallStack
         [String]$Source = "$($CallStack[1].FunctionName) : "
-        [String]$CSTab  = '    ' * ($CallStack.Count - 4)
+        $EntryPrefix += '    ' * ($CallStack.Count - 4)
 
-        [String]$Timestamp   = [DateTime]::Now.ToString('yyyy.MM.dd HH:mm:ss')
-        [String]$EntryPrefix = "[$Timestamp] $Type : " + $CSTab
-        [String]$FullMessage = $EntryPrefix + $Source + $Message
-
-        [String[]]$LogData = $FullMessage -Split "`n" -Join "`n$(' ' * (4 + $EntryPrefix.Length))" -Split "`n"
+        [String[]]$LogData = ($EntryPrefix + $Source + $Message) -Split "`n" -Join "`n$(' ' * (4 + $EntryPrefix.Length))" -Split "`n"
 
         Set-UTF8Content $G__SessionLog $LogData -Append -NoLog
     }
@@ -340,7 +366,7 @@ Function Sync-Ets2ModRepo {
 
         [Double]$BytesPerSecond = $Bytes / $Duration
 
-        If ($Unit) {
+        If ($PSBoundParameters.ContainsKey('Unit')) {
             [String]$UnitSymbol    = $Unit.ToLower().Replace('b', 'B').Replace('m', 'M').Replace('g', 'G')
             [Double]$ConvertedRate = Switch ($UnitSymbol) {
                 'B/s'  {$BytesPerSecond}
@@ -510,6 +536,34 @@ Function Sync-Ets2ModRepo {
         Return $IsLoaded
     }
 
+    Function Get-StringHash {
+        [CmdletBinding(DefaultParameterSetName = 'String')]
+        Param (
+            [Parameter(Mandatory, ParameterSetName = 'String', Position = 0)]
+            [String[]]$String,
+
+            [Parameter(Mandatory, ParameterSetName = 'Bytes', Position = 0)]
+            [Byte[]]$Bytes,
+
+            [Parameter(Position = 1)]
+            [ValidateSet('CRC32', 'SHA1', 'SHA256', 'SHA384', 'SHA512', 'MD5')]
+            [String]$Algorithm = 'SHA256',
+
+            [Parameter(ParameterSetName = 'String')]
+            [Text.Encoding]$Encoding = [Text.UTF8Encoding]::New($False)
+        )
+
+        If ($PSBoundParameters.ContainsKey('String')) {[Byte[]]$Bytes = $Encoding.GetBytes($String -Join "`n")}
+
+        If ($Algorithm -eq 'CRC32') {
+            Return ([WindowsAPI]::RtlComputeCrc32(0, $Bytes, $Bytes.Count).ToString('X8'))
+        }
+        Else {
+            [Hashtable]$GfHSplat = @{InputStream = [IO.MemoryStream]::New($Bytes); Algorithm = $Algorithm}
+            Return (Get-FileHash @GfHSplat).Hash
+        }
+    }
+
     Function Test-FileHash {
         [CmdletBinding()]
         Param (
@@ -615,9 +669,8 @@ Function Sync-Ets2ModRepo {
 
             Write-Host @PromptSplat
         }
-        Write-Log INFO 'Clearing input buffer...'
-        While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)}
-        Write-Log INFO 'Input buffer cleared.'
+        $Host.UI.RawUI.FlushInputBuffer()
+        Write-Log INFO 'Flushed input buffer.'
 
         Write-Log INFO 'Awaiting keypress...'
         [Void]$Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown')
@@ -645,28 +698,6 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO 'Received key press input request.'
 
-        If ($PSCmdlet.ParameterSetName -eq 'Timeout') {
-            If ($DefaultKey -And !$DefaultKeyCode) {[Byte]$DefaultKeyCode = [Byte]$DefaultKey}
-
-            [Bool]$Received      = $False
-            [Timers.Timer]$Timer = [Timers.Timer]::New()
-            $Timer.Interval      = $Timeout * 1000
-            $Timer.AutoReset     = $False
-
-            [ScriptBlock]$ReceiverScript = {
-                Do {For ([Byte]$Key = 0; $Key -lt [Byte]::MaxValue; $Key++) {If ([WindowsAPI]::GetAsyncKeyState($Key) -lt 0) {Return $Key}}
-                Start-Sleep -Milliseconds 50} While ($True)
-            }
-
-            [Hashtable]$TimerObjectEvent = @{
-                InputObject      = $Timer
-                EventName        = 'Elapsed'
-                SourceIdentifier = 'Timer.Elapsed'
-                Action           = {If (!$Received) {$Timer.Stop()}}
-            }
-            [Void](Register-ObjectEvent @TimerObjectEvent)
-        }
-
         If ($Prompt) {
             [Hashtable]$PromptSplat = @{
                 Object    = $Prompt
@@ -678,34 +709,30 @@ Function Sync-Ets2ModRepo {
             Write-Host @PromptSplat
         }
 
-        Write-Log INFO 'Clearing input buffer...'
-        While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)}
-        Write-Log INFO 'Input buffer cleared.'
+        $Host.UI.RawUI.FlushInputBuffer()
+        Write-Log INFO 'Flushed input buffer.'
 
         If ($PSCmdlet.ParameterSetName -eq 'Timeout') {
-
-            $Timer.Start()
-            $ReceiverJob = Start-Job $ReceiverScript
+            If ($DefaultKey -And !$DefaultKeyCode) {[Byte]$DefaultKeyCode = [Byte]$DefaultKey}
 
             Write-Log INFO "Awaiting key press. $Timeout second timeout..."
 
-            While ($Timer.Enabled -And !$Received) {
-                If ($ReceiverJob.State -eq 'Completed') {
-                    [Byte]$KeyCode = $ReceiverJob | Receive-Job
-                    $Received      = $True
-                    $Timer.Stop()
+            [TimeSpan]$TimerDuration = [TimeSpan]::Zero
+            [DateTime]$TimerStart    = [DateTime]::Now
+
+            While ($TimerDuration.TotalSeconds -lt $Timeout) {
+                $TimerDuration = [DateTime]::Now - $TimerStart
+                If ($Host.UI.RawUI.KeyAvailable) {
+                    [Byte]$KeyCode = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
+                    Break
                 }
-                ElseIf (!$Timer.Enabled) {Break}
                 Start-Sleep -Milliseconds $RefreshRateMs
             }
 
-            Remove-Job -Job $ReceiverJob -Force
-            Unregister-Event $TimerObjectEvent['SourceIdentifier']
-
             [Byte]$KeyPress = Switch (13) {# [Enter]
-                {$KeyCode -And $Received} {$KeyCode; Write-Log INFO "Keypress received: $KeyCode"; Break}
-                {$DefaultKeyCode}         {$DefaultKeyCode; Write-Log INFO "Timed out. Using default keypress: $DefaultKeyCode"; Break}
-                Default                   {$_; Write-Log INFO "Timed out. Default keypress undefined, using: $_";Break}
+                {$KeyCode}        {$KeyCode; Write-Log INFO "Keypress received: $KeyCode"; Break}
+                {$DefaultKeyCode} {$DefaultKeyCode; Write-Log INFO "Timed out. Using default keypress: $DefaultKeyCode"; Break}
+                Default           {$_; Write-Log INFO "Timed out. Default keypress undefined, using: $_";Break}
             }
         }
         Else {
@@ -877,7 +904,7 @@ Function Sync-Ets2ModRepo {
             Default    {Throw 'Invalid parameter set name.'}
         }
 
-        [Regex]$PathSearchPattern  = '(?i)(?<="path"\s+")[a-z]\:(?:\\\\.+)+(?=")'
+        [Regex]$PathSearchPattern  = ('(?i)(?<="path"\s+")[a-z]\:(?:\\\\.+)+(?=")', '(?i)(?<="path"\s+")[a-z]\:(?:\/\/.+)+(?=")')[$G__OS -eq 'Linux']
         [Regex]$AppIDSearchPattern = '(?<=")' + $G__GameAppID + '(?="\s+"\d+")'
         [Regex]$InstallDirPattern  = '(?<="installdir"\s+")[^"]+(?=")'
 
@@ -886,26 +913,26 @@ Function Sync-Ets2ModRepo {
         Write-Log INFO "Located Steam Root Directory at: '$SteamRoot'."
         
         Write-Log INFO "Performing $G__GameNameShort SteamApps Directory Lookup in Steam Library VDF ('$SteamRoot\SteamApps\libraryfolders.vdf')."
-        [String[]]$LibraryData = Get-UTF8Content "$SteamRoot\SteamApps\libraryfolders.vdf"
+        [String[]]$LibraryData = Get-UTF8Content ([IO.Path]::Combine($SteamRoot, 'SteamApps', 'libraryfolders.vdf'))
         [String]$SteamApps     = ForEach ($Line in $LibraryData) {
             If ($Line -Match $PathSearchPattern)  {[String]$Path = $Matches[0] -Replace '\\\\', '\'; Continue}
-            If ($Line -Match $AppIDSearchPattern) {"$Path\SteamApps"; Break}
+            If ($Line -Match $AppIDSearchPattern) {[IO.Path]::Combine($Path, 'SteamApps'); Break}
         
         }
         Write-Log INFO "Located $G__GameNameShort SteamApps Directory at: '$SteamApps'."
 
-        [IO.DirectoryInfo]$WorkshopDir = "$SteamApps\workshop\content\$G__GameAppID"
+        [IO.DirectoryInfo]$WorkshopDir = [IO.Path]::Combine($SteamApps, 'workshop', 'content', $G__GameAppID)
         Write-Log INFO "Successfully Located $G__GameNameShort Workshop Direcory at: '$($WorkshopDir.FullName)'."
         
         # If the user provided -Workshop, return the workshop directory
         If ($Workshop.IsPresent) {Return $WorkshopDir}
 
         # Otherwise the user must have provided -Root, so we locate and return the game's root/install directory
-        [String]$AppManifestACF = "$SteamApps\appmanifest_$G__GameAppID.acf"
+        [String]$AppManifestACF = [IO.Path]::Combine($SteamApps, "appmanifest_$G__GameAppID.acf")
         Write-Log INFO "Performing Game Root Directory Lookup in $G__GameNameShort App Manifest ACF ('$AppManifestACF')."
 
         [String[]]$AppCacheData = Get-UTF8Content $AppManifestACF
-        ForEach ($Line in $AppCacheData) {If ($Line -Match $InstallDirPattern) {[String]$InstallDir = "$SteamApps\common\$($Matches[0])"; Break}}
+        ForEach ($Line in $AppCacheData) {If ($Line -Match $InstallDirPattern) {[String]$InstallDir = [IO.Path]::Combine($SteamApps, 'common', $($Matches[0])); Break}}
         
         [IO.DirectoryInfo]$RootDir = $InstallDir
 
@@ -1366,9 +1393,9 @@ Function Sync-Ets2ModRepo {
         Write-Log INFO "Displaying landing screen with continuation prompt '$Prompt' and timeout of $Timeout."
 
         Write-Host ($G__UILine * [Console]::BufferWidth)
-        Write-Host "`n$G__UITab$($G__ScriptDetails['Title'])`n"
-        Write-Host "$G__UITab$($G__ScriptDetails['Version']), Updated $($G__ScriptDetails['VersionDate'])"
-        Write-Host "$G__UITab$($G__ScriptDetails['Copyright']) - $($G__ScriptDetails['Author'])`n"
+        Write-Host "`n$G__UITab$($G__ScriptDetails.Title)`n"
+        Write-Host "$G__UITab$($G__ScriptDetails.Version), Updated $($G__ScriptDetails.VersionDate)"
+        Write-Host "$G__UITab$($G__ScriptDetails.Copyright) - $($G__ScriptDetails.Author)`n"
 
         [Void](Read-KeyPress $Prompt -Timeout $Timeout -DefaultKeyCode 13 -Clear)
     }
@@ -1407,7 +1434,7 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO 'Displaying main menu.'
 
-        Write-Host "`n    $($G__ScriptDetails['Title'])   $G__ScriptVersion`n"
+        Write-Host "`n    $($G__ScriptDetails.Title)   $($G__ScriptDetails.Version)`n"
 
         Write-Host ($G__UILine * [Console]::BufferWidth)
 
@@ -1577,15 +1604,123 @@ Function Sync-Ets2ModRepo {
         If (!$NoReturn.IsPresent) {[Console]::SetCursorPosition(0, $From)}
     }
 
+    Function Get-PersistentStorage {
+        [CmdletBinding()]
+        Param ([IO.FileInfo]$File = $G__ScriptPath, [String]$EOF = '#PERSIST_END', [String]$BOF)
+
+        Write-Log INFO 'Received persistent storage request.'
+
+        [Collections.Generic.List[String]]$Data = @()
+        [Text.UTF8Encoding]$UTF8Encoding        = [Text.UTF8Encoding]::New($False)
+
+        [Threading.CancellationTokenSource]$Cancellation    = [Threading.CancellationTokenSource]::New()
+        [Collections.Generic.IAsyncEnumerable[String]]$Enum = [IO.File]::ReadLinesAsync($File.FullName, $UTF8Encoding, $Cancellation.Token)
+        [Collections.Generic.IAsyncEnumerator[String]]$Feed = $Enum.GetAsyncEnumerator($Cancellation.Token)
+
+        Write-Log INFO "Initialized cancellation token and asynchronous enumerator for '$($File.FullName)'."
+        
+        Try {
+            [Bool]$InRange = !$PSBoundParameters.ContainsKey('BOF')
+            If ($InRange) {Write-Log INFO "Performing asynchronous enumeration until EOF token '$EOF'."}
+            Else          {Write-Log INFO "Performing asynchronous enumeration until EOF token '$EOF'. Ignoring data preceding BOF token '$BOF'."}
+            While ($Feed.MoveNextAsync().AsTask().Result -And !$Cancellation.IsCancellationRequested) {
+                [String]$Line = $Feed.Current
+                If     ($Line -eq '')   {Continue}
+                ElseIf (!$InRange)      {$InRange = $Line -eq $BOF}
+                ElseIf ($Line -eq $EOF) {$Cancellation.Cancel()}
+                Else                    {$Data.Add($Line)}
+            }
+            Write-Log INFO "Enumeration halted on $($Data.Count): IsCancellationRequested=$($Cancellation.IsCancellationRequested); Current='$Line'"
+        }
+        Catch   {Write-Log ERROR "Failed to read persistent storage: $($_.Exception.Message)"; Throw $_}
+        Finally {
+            If ($Null -ne $Feed)         {[Void]$Feed.DisposeAsync()}
+            If ($Null -ne $Cancellation) {$Cancellation.Dispose()}
+            Write-Log INFO 'Disposed feed and cancellation token.'
+        }
+        
+        If ($Data.Count -eq 0) {
+            Write-Log ERROR "Failed to read persistent storage: No data was read using EOF '$EOF'$(('', " + BOF '$BOF'")[$PSBoundParameters.ContainsKey('BOF')])."
+            Throw 'Failed to read persistent storage: No data was read.'
+        }
+
+        Write-Log INFO "Retrieved $($Data.Count) entries:`n$($Data -Join "`n")"
+        
+        Return $Data
+    }
+
+    Function Set-PersistentStorage {
+        [CmdletBinding()]
+        Param (
+            [Parameter(Mandatory, Position = 0)][Collections.Generic.List[String]]$Data,
+            [Parameter(Position = 1)][IO.FileInfo]$File = $G__ScriptPath,
+            [String]$EOF = '#PERSIST_END', [String]$BOF
+        )
+
+        Write-Log INFO 'Received persistent storage write request.'
+
+        [Collections.Generic.List[String]]$FileContents = Get-UTF8Content $File
+        Write-Log INFO "Loaded '$($File.FullName)'."
+
+        [Int]$BOFIndex = If ($PSBoundParameters.ContainsKey('BOF')) {$FileContents.IndexOf($BOF)} Else {0}
+        If ($BOFIndex -eq -1) {
+            Write-Log WARN "BOF token '$BOF' not detected in '$($File.Name)'. Using start index 0. Inserting token at index 0 of provided data."
+            $Data.Insert(0, $BOF)
+            $BOFIndex = 0
+        }
+
+        [Int]$EOFIndex = $FileContents.IndexOf($EOF)
+        If ($EOFIndex -eq -1) {
+            $Data.Add($EOF)
+            Write-Log WARN "Failed to retrieve existing storage: EOF token '$EOF' not detected in '$($File.Name)'. Appending token to provided storage data."
+            Write-Log WARN 'Attempting to retrieve existing storage by line matching. EOF: ''<#'''
+            [Int]$EOFIndex = $FileContents.IndexOf('<#')
+            If ($EOFIndex -eq -1) {
+                Write-Log ERROR "Failed to retrieve existing storage: EOF token '<#' not detected in '$($File.Name)'. Aborting operation."
+                Throw "Failed to retrieve existing storage: EOF token '<#' not detected in '$($File.Name)'."
+            }
+            Else {
+                [Collections.Generic.List[String]]$_Storage = $FileContents.GetRange(0, $EOFIndex)
+                For ([UInt32]$Index = $_Storage.Count - 1; $Index -ge 0; $Index--) {If ($_Storage[$Index] -NotMatch '^#(NUM|DEC|STR)_[a-z]+=.+;$') {$_Storage.RemoveAt($Index)} Else {Break}}
+                If ($_Storage.Count -eq 0) {
+                    Write-Log ERROR 'Failed to retrieve existing storage: No valid data detected in storage range. Aborting operation.'
+                    Throw 'Failed to retrieve existing storage: No valid data detected in storage range.'
+                }
+                Write-Log INFO 'Detected storage data by line matching.'
+                [Collections.Generic.List[String]]$ExistingStorage = $_Storage
+            }
+        }
+        Else {[Collections.Generic.List[String]]$ExistingStorage = $FileContents.GetRange($BOFIndex, $EOFIndex)}
+
+        Write-Log INFO "Existing storage: $BOFIndex..$($ExistingStorage.Count)/$($FileContents.Count) entries."
+
+        If ((Get-StringHash $ExistingStorage) -eq (Get-StringHash $Data)) {
+            Write-Log INFO 'No changes detected in provided persistent storage. Aborting operation.'
+            Return
+        }
+
+        $FileContents.RemoveRange($BOFIndex, $ExistingStorage.Count)
+        $FileContents.InsertRange($BOFIndex, $Data)
+        
+        Write-Log INFO "Removed old storage range $BOFIndex..$($ExistingStorage.Count). Inserted new storage range: $BOFIndex..$($Data.Count)"
+
+        Set-UTF8Content $File $FileContents -NoNewline
+
+        Write-Log INFO 'Successfully updated persistent storage data.'
+    }
+
     Function Read-EmbeddedValue {
         [CmdletBinding()]
         Param ([Parameter(Mandatory)][UInt32]$Index, [Collections.Generic.List[String]]$CustomData)
         
         Write-Log INFO 'Received embedded value read request.'
 
-        If ($CustomData) {Write-Log INFO 'Reading embedded value from provided custom data.'}
+        If ($PSBoundParameters.ContainsKey('CustomData')) {
+            [Collections.Generic.List[String]]$ScriptData = $CustomData
+            Write-Log INFO 'Reading embedded value from provided custom data.'
+        }
+        Else {[Collections.Generic.List[String]]$ScriptData = $G__StoredData}
 
-        [Collections.Generic.List[String]]$ScriptData = If ($CustomData) {$CustomData} Else {Get-UTF8Content $G__ScriptPath -Count 1000}
         [String]$Info,   [String]$RawValue = $ScriptData[$Index].Substring(0, $ScriptData[$Index].IndexOf(';')).Substring(1) -Split '=', 2
         [String]$Format, [String]$Name     = $Info -Split '_', 2
 
@@ -1603,16 +1738,21 @@ Function Sync-Ets2ModRepo {
         Param ([Hashtable]$DataIndices = $G__DataIndices, [Collections.Generic.List[String]]$CustomData)
         
         Write-Log INFO 'Received read request of all embedded values.'
-        If ($CustomData) {Write-Log INFO 'Reading embedded values from provided custom data.'}
+        If ($PSBoundParameters.ContainsKey('CustomData')) {
+            [Collections.Generic.List[String]]$ScriptData = $CustomData
+            Write-Log INFO 'Reading embedded values from provided custom data.'
+        }
+        Else {[Collections.Generic.List[String]]$ScriptData = $G__StoredData}
         
         $DataIndices['ScriptVersion'] = [Hashtable]@{Index = 0; Type = [String]}
         [Hashtable]$ReadData          = @{}
         [String[]]$Pairs              = @()
-        [Collections.Generic.List[String]]$ScriptData = If ($CustomData) {$CustomData} Else {Get-UTF8Content $G__ScriptPath -Count 1000}
 
         ForEach ($Key in $DataIndices.Keys) {
             [String]$ScriptLine              = $ScriptData[$DataIndices.$Key.Index]
-            [String]$Info, [String]$RawValue = $ScriptLine.Substring(0, $ScriptLine.IndexOf(';')).Substring(1) -Split '=', 2
+            [String]$Info, [String]$RawValue = $ScriptLine -Split '=', 2
+            $Info = $Info.Substring(1)
+            $RawValue = $RawValue.Substring(0, $RawValue.Length - 1)
             [String]$Format, [String]$Name   = $Info -Split '_', 2
             Switch ($Format) {
                 'NUM'   {[Int64]$Value  = $RawValue}
@@ -1654,10 +1794,10 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO "Received embedded value write request: '$Value' at index $Index."
 
-        [Collections.Generic.List[String]]$ScriptData = Get-UTF8Content $G__ScriptPath
+        [Collections.Generic.List[String]]$ScriptData = Get-PersistentStorage
         $ScriptData[$Index] = New-EmbeddedValue $ScriptData[$Index] $Value
 
-        Set-UTF8Content $G__ScriptPath $ScriptData -NoNewline
+        Set-PersistentStorage $ScriptData
         Write-Log INFO "Embedded value written: '$Value'"
     }
 
@@ -1667,7 +1807,7 @@ Function Sync-Ets2ModRepo {
         
         Write-Log INFO 'Received write request for all embedded values.'
 
-        [Collections.Generic.List[String]]$ScriptData = Get-UTF8Content $G__ScriptPath
+        [Collections.Generic.List[String]]$ScriptData = Get-PersistentStorage
         [String[]]$Pairs = @()
 
         ForEach ($Key in $G__DataIndices.Keys) {
@@ -1677,7 +1817,7 @@ Function Sync-Ets2ModRepo {
 
             $ScriptData[$Index] = New-EmbeddedValue $ScriptData[$Index] $Value
         }
-        Set-UTF8Content $G__ScriptPath $ScriptData -NoNewline
+        Set-PersistentStorage $ScriptData
         Write-Log INFO "All embedded values written ($($Pairs.Count)):`n$($Pairs -Join "`n")"
     }
 
@@ -1711,6 +1851,29 @@ Function Sync-Ets2ModRepo {
         }}
         Write-Log INFO "Grammatical number switched: '$Word' > '$Return'"
         Return $Return
+    }
+
+    Function Get-ContrastingColor {
+        [CmdletBinding(DefaultParameterSetName = 'ForColor')]
+        Param (
+            [Parameter(ParameterSetName = 'ForColor', Mandatory, Position = 0)]
+            [Parameter(ParameterSetName = 'ForBackground', Position = 0)]
+            [Parameter(ParameterSetName = 'ForForeground', Position = 0)]
+            [ConsoleColor]$Color,
+            [Parameter(ParameterSetName = 'ForBackground', Mandatory)][Switch]$ForBackground,
+            [Parameter(ParameterSetName = 'ForForeground', Mandatory)][Switch]$ForForeground
+        )
+
+        Write-Log INFO "Received contrasting color request for '$Color'."
+
+        [ConsoleColor]$Contrast = Switch ($Color) {
+            'Black'   {[ConsoleColor]::White}
+            'DarkGray'{[ConsoleColor]::White}
+            'White'   {'Black'}
+            Default    {'DarkGray'}
+        }
+        Write-Log INFO "Contrasting color for '$Color': '$Contrast'"
+        Return $Contrast
     }
 
     Function Get-EnglishCulture {
@@ -2206,6 +2369,7 @@ Function Sync-Ets2ModRepo {
         '    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);',
         '    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
         '    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+        '    [DllImport("ntdll.dll")] public static extern uint RtlComputeCrc32(uint dwInitial, byte[] pData, int iLen);',
         '}',
         'public enum DeleteDisabledOptions {Off = 0, ManagedOnly = 1, All = 2}',
         'public enum ModUpdateState {Installing = 0, Repairing = 1, Updating = 2, Validating = 3, Reinstalling = 4}',
@@ -2234,6 +2398,8 @@ Function Sync-Ets2ModRepo {
     [Bool]$G__OfflineMode       = $False
     [Bool]$G__ClampAvailable    = 'Clamp' -In [String[]][Math].GetMethods().Name
     [Hashtable]$G__RI_RENGlobal = @{Force = $True; EA = 0}
+    
+    [Collections.Generic.List[String]]$G__StoredData = Get-PersistentStorage
 
     [Hashtable]$G__DataIndices = @{
         # ScriptVersion  = 0  <-- Script version is ALWAYS the first embedded value (hardcoded)
@@ -2247,12 +2413,12 @@ Function Sync-Ets2ModRepo {
         RepositoryURL    = [Hashtable]@{Index = 8; Type = [String]}
         OfflineData      = [Hashtable]@{Index = 9; Type = [String]}
         LogRetentionDays = [Hashtable]@{Index = 10; Type = [SByte]}
-        IsExperimental   = [Hashtable]@{Index = 11; Type = [Bool]}
+        IsExperimental   = [Hashtable]@{Index = 11; Type = [Int]}
         TargetGame       = [Hashtable]@{Index = 12; Type = [String]}
         ProfileBackups   = [Hashtable]@{Index = 13; Type = [Bool]}
     }
     [Hashtable]$G__AllGameInfo = @{
-        ETS = [Hashtable]@{
+        ETS2 = [Hashtable]@{
             AppID    = 227300
             Name     = 'Euro Truck Simulator 2'
             Short    = 'ETS2'
@@ -2311,6 +2477,8 @@ Function Sync-Ets2ModRepo {
         $T__Step = [DateTime]::Now
     }
 
+    [UInt32]$G__Revision          = Limit-Range $G__IsExperimental 0 ([UInt32]::MaxValue)
+    [Bool]$G__IsExperimental      = $G__IsExperimental -gt -1
     [Hashtable]$G__TitleSpecifics = $G__AllGameInfo.$G__TargetGame
     [UInt32]$G__GameAppID         = $G__TitleSpecifics.AppID
     [String]$G__GameName          = $G__TitleSpecifics.Name
@@ -2325,7 +2493,7 @@ Function Sync-Ets2ModRepo {
     If (!(Test-PSHostCompatibility)) {Wait-WriteAndExit (" Startup aborted - Incompatible console host.`n Current host '" + $Host.Name + "' does not support required functionality.")}
 
     [Console]::CursorVisible     = $False
-    [Console]::Title             = "$G__GameNameShort External Mod Manager v$G__ScriptVersion"
+    [Console]::Title             = "TruckSim External Mod Manager v$G__ScriptVersion"
     [UInt16]$WndX, [UInt16]$WndY = [Console]::WindowWidth, [Console]::WindowHeight
     [UInt16]$G__WndWidth         = ($WndX, $G__MinWndWidth)[$WndX -lt $G__MinWndWidth]
     [UInt16]$G__WndHeight        = ($WndY, $G__MinWndHeight)[$WndY -lt $G__MinWndHeight]
@@ -2349,28 +2517,25 @@ Function Sync-Ets2ModRepo {
         [Hashtable]$T__OrigPos    = @{X = [Console]::CursorLeft; Y = [Console]::CursorTop}
         [HashTable]$T__PromptPos  = @{X = $T__OrigPos.X - 27; Y = $T__OrigPos.Y + 2}
 
-        Try {[Console]::CursorVisible = $True} Catch {}
-
         Do {
             [Console]::SetCursorPosition($T__PromptPos.X, $T__PromptPos.Y)
             
-            Write-Log INFO 'Clearing input buffer...'
-            While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)}
-            Write-Log INFO 'Input buffer cleared.'
+            $Host.UI.RawUI.FlushInputBuffer()
+            Write-Log INFO 'Flushed input buffer.'
+            [Console]::CursorVisible = $True
 
             Write-Host -NoNewline -BackgroundColor Yellow ' Enter mod repository URL: '
-            [String]$T__URL = Read-Host
-            Try   {
-                [PSObject]$G__RepositoryInfo = Get-RepositoryInfo -RepoURL $T__URL -EA 1
-                Break
-            }
+            [String]$T__URL          = Read-Host
+            [Console]::CursorVisible = $False
+
+            Try   {[PSObject]$G__RepositoryInfo = Get-RepositoryInfo -RepoURL $T__URL -EA 1; Break}
             Catch {Write-Host -ForegroundColor Red ' No valid repository data found. Please try again.'; Start-Sleep 2}
             [UInt16]$T__LineDiff = [Console]::CursorTop - $T__PromptPos.Y
             [Console]::SetCursorPosition($T__PromptPos.X, $T__PromptPos.Y)
             For ([UInt16]$T__Line = 0; $T__Line -lt $T__LineDiff; $T__Line++) {Write-Host (' ' * ([Console]::BufferWidth - $T__PromptPos.X))}
             Write-Host -NoNewline (' ' * ([Console]::BufferWidth - $T__PromptPos.X))
         } While ($True)
-        Try {[Console]::CursorVisible = $False} Catch {}
+        
         [Console]::SetCursorPosition($T__OrigPos.X, $T__OrigPos.Y)
         [TimeSpan]$T__PromptDuration = New-TimeSpan $T__PromptStart ([DateTime]::Now)
 
@@ -2391,7 +2556,7 @@ Function Sync-Ets2ModRepo {
                 }
                 $G__OfflineData = $T__RepositoryInfoString
                 Write-EmbeddedValue $G__DataIndices.OfflineData.Index $T__RepositoryInfoString
-                Write-Log INFO "Updated offline repository information:`n$T__RepositoryInfoString"
+                Write-Log INFO "Updated offline repository information: $T__RepositoryInfoString"
             }
             Catch {
                 Write-Log WARN "Failed to update offline repository information:`n$($_.Exception.Message)"
@@ -2448,13 +2613,14 @@ Function Sync-Ets2ModRepo {
     [Hashtable]$G__ScriptDetails = @{
         Author      = 'RainBawZ'
         Copyright   = [Char]0x00A9 + [DateTime]::Now.ToString('yyyy')
-        Title       = ($Null, '[Experimental] ')[$G__IsExperimental] + "$G__GameName External Mod Manager"
+        Title       = ($Null, '[Experimental] ')[$G__IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
-        Version     = "Version $G__ScriptVersion" + ($Null, ' (EXPERIMENTAL)')[$G__IsExperimental]
-        VersionDate = '2024.11.1'
+        Version     = "Version $G__ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $G__Revision)")[$G__IsExperimental]
+        VersionDate = '2024.11.7'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
+    $G__ScriptDetails['GitHubFile']  = $G__ScriptDetails.GitHub + 'blob/main/Client/' + ($Null, 'Experimental/')[$G__IsExperimental] + "$($G__ScriptDetails.ShortTitle).ps1"
     [String[]]$G__UpdateNotes = @(
         '',
         "3.7.0$(($Null, ' (EXPERIMENTAL)')[$G__IsExperimental])",
@@ -2463,18 +2629,22 @@ Function Sync-Ets2ModRepo {
         '- Added internal support for experimental versions.',
         '- Added option to set retention time or toggle deletion of old logs.',
         '- Added option to toggle automatic profile backups.',
+        '',
         '- Fixed text collision between Repository URL prompt and loading screen information.',
+        '- Fixed keypress prompts with timeouts not skipping.',
         '- Fixed first time profile selection menu starting while the script was still loading.',
         '- Fixed crash when selecting "Import load order" from the main menu.',
         '- Fixed uncommanded menu selections due to input buffering outside active prompts.',
         '- Fixed repository downloader not supporting HTTPS in UseIWR mode.',
         '- Fixed TLS 1.2 not being enforced for repository communication.',
+        '',
         '- Improved overall script performance.',
         '- Improved appearance of the Repository URL prompt.',
         '- Improved type definition and assembly importing.',
         '- Improved interactivity of keypress prompts.',
         '- Improved loading screen layout information.',
         '- Improved accuracy of log entries.',
+        '',
         '- Changed script name to "TruckSim External Mod Manager" (TSExtModMan) to reflect addition of ATS support.',
         '- Changed log entry chronology. (Reversed from bottom-to-top).'<#,
         '',
@@ -2487,7 +2657,7 @@ Function Sync-Ets2ModRepo {
         '- Stability improvements.'#>
     )
     [String[]]$G__KnownIssues = @(
-        '- Keypress prompts with timeouts do not skip as intended.',
+        '- Automatic moving of the script if misplaced does not work.',
         '- Significant slowdown when loading TS SE Tool information under PowerShell 5.1.',
         '- Significant slowdown when starting the mod updating procedure under PowerShell 5.1.',
         '- Slight slowdown when processing load order after mod updating under PowerShell 5.1.'
@@ -2568,8 +2738,12 @@ Function Sync-Ets2ModRepo {
         Catch {
             If ($_.Exception.Message -Like "*is experimental*") {
                 Write-Log INFO "SelfUpdater : $($_.Exception.Message)"
-                Write-Host -NoNewline -ForegroundColor Yellow 'N/A'.PadRight($Padding)
-                Write-Host -ForegroundColor Yellow 'Updating is disabled for experimental versions.'
+                Write-Host -NoNewline -ForegroundColor Yellow '---'.PadRight($Padding)
+                Switch (' ' * [Console]::CursorLeft) {Default {
+                    Write-Host -ForegroundColor Yellow 'Automatic updates disabled for experimental versions.'
+                    Write-Host -ForegroundColor Yellow ($_ + 'Get the latest version from GitHub:')
+                    Write-Host -ForegroundColor DarkCyan ($_ + $G__ScriptDetails.GitHubFile)
+                }}
 
                 Write-Log INFO 'SelfUpdater : Displaying experimental version information.'
 
