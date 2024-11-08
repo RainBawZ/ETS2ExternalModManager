@@ -1,16 +1,16 @@
 #STR_version=3.7.0;
-#STR_profile=***GAME_PROFILE_PLACEHOLDER***;
+#STR_profile=015261696E4261775A;
 #NUM_start=0;
 #NUM_validate=0;
 #NUM_purge=0;
 #NUM_noconfig=0;
 #STR_loadorder=Default;
 #NUM_editor=0;
-#STR_server=http://your.domain/repo;
-#STR_offlinedata={};
+#STR_server=http://tams.pizza/ets2repo;
+#STR_offlinedata={"Script":"ETS2ExtModMan.ps1","ETS2":{"DefaultOrder":"Default","Orders":"load_orders.json","VersionData":"versions.json"},"ATS":{"DefaultOrder":"ats/Default","Orders":"ats/load_orders.json","VersionData":"ats/versions.json"},"DefaultOrder":"Default","Orders":"load_orders.json","VersionData":"versions.json","DecFile":"sii_decrypt.exe","DecHash":"sii_decrypt.txt","TSSE":"TruckSaveEditor.zip"};
 #NUM_logretention=0;
-#NUM_experimental=21;
-#STR_targetgame=_;
+#NUM_experimental=33;
+#STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #PERSIST_END
 
@@ -636,7 +636,7 @@ Function Sync-Ets2ModRepo {
         Write-Host -ForegroundColor Red $InputObject
         
         Unprotect-Variables
-        Wait-KeyPress
+        [Void](Read-KeyPress)
 
         If ($Restart.IsPresent) {
             Write-Log INFO 'Executing restart routine...'
@@ -647,47 +647,12 @@ Function Sync-Ets2ModRepo {
         Exit
     }
 
-    Function Wait-KeyPress {
-        [CmdletBinding(DefaultParameterSetName = 'NoPrompt')]
-        Param (
-            [Parameter(ParameterSetName = 'Prompt', Mandatory, Position = 0)][String]$Prompt,
-            [Parameter(ParameterSetName = 'Prompt')][ConsoleColor]$ForegroundColor,
-            [Parameter(ParameterSetName = 'Prompt')][ConsoleColor]$BackgroundColor,
-            [Parameter(ParameterSetName = 'Prompt')][Switch]$NoNewline,
-            [Parameter(ParameterSetName = 'Prompt')][Switch]$Clear
-        )
-        Write-Log INFO 'Received keypress wait request.'
-        If ($PSCmdlet.ParameterSetName -eq 'Prompt') {
-            
-            [Hashtable]$PromptSplat = @{
-                Object    = $Prompt
-                NoNewline = ($NoNewline.IsPresent, $True)[$Clear.IsPresent]
-            }
-
-            If ($ForegroundColor) {$PromptSplat['ForegroundColor'] = $ForegroundColor}
-            If ($BackgroundColor) {$PromptSplat['BackgroundColor'] = $BackgroundColor}
-
-            Write-Host @PromptSplat
-        }
-        $Host.UI.RawUI.FlushInputBuffer()
-        Write-Log INFO 'Flushed input buffer.'
-
-        Write-Log INFO 'Awaiting keypress...'
-        [Void]$Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown')
-        If ($Clear.IsPresent) {
-            [Console]::SetCursorPosition(0, [Console]::CursorTop)
-            Write-Host -NoNewline (' ' * $Prompt.Length)
-            [Console]::SetCursorPosition(0, [Console]::CursorTop)
-        }
-        Write-Log INFO 'Keypress received.'
-    }
-
     Function Read-KeyPress {
         [CmdletBinding(DefaultParameterSetName = 'Default')]
         Param (
             [Parameter(Position = 0)][String]$Prompt,
-            [Alias('Fg')][ConsoleColor]$ForegroundColor,
-            [Alias('Bg')][ConsoleColor]$BackgroundColor,
+            [Alias('Fg')][ConsoleColor]$ForegroundColor = [Console]::ForegroundColor,
+            [Alias('Bg')][ConsoleColor]$BackgroundColor = [Console]::BackgroundColor,
             [Switch]$NoNewline, [Switch]$Clear,
 
             [Parameter(ParameterSetName = 'Timeout', Mandatory)][UInt16]$Timeout,
@@ -698,9 +663,17 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO 'Received key press input request.'
 
+        [TimeSpan]$TimerDuration = [TimeSpan]::Zero
+        [DateTime]$TimerStart    = [DateTime]::Now
+        [Int]$SecondsLeft        = $Timeout
+        If ($PSBoundParameters.ContainsKey('DefaultKey')) {
+            If ($PSBoundParameters.ContainsKey('DefaultKeyCode')) {Write-Log WARN 'Duplicate keypress defaults specified. Ignoring -DefaultKeyCode parameter in favor of -DefaultKey.'}
+            [Byte]$DefaultKeyCode = [Byte]$DefaultKey
+        }
+        
         If ($Prompt) {
             [Hashtable]$PromptSplat = @{
-                Object    = $Prompt
+                Object    = $Prompt -Replace '\$Timeout', "$Timeout"
                 NoNewline = ($NoNewline.IsPresent, $True)[$Clear.IsPresent]
             }
             If ($ForegroundColor) {$PromptSplat['ForegroundColor'] = $ForegroundColor}
@@ -713,27 +686,35 @@ Function Sync-Ets2ModRepo {
         Write-Log INFO 'Flushed input buffer.'
 
         If ($PSCmdlet.ParameterSetName -eq 'Timeout') {
-            If ($DefaultKey -And !$DefaultKeyCode) {[Byte]$DefaultKeyCode = [Byte]$DefaultKey}
-
             Write-Log INFO "Awaiting key press. $Timeout second timeout..."
-
-            [TimeSpan]$TimerDuration = [TimeSpan]::Zero
-            [DateTime]$TimerStart    = [DateTime]::Now
 
             While ($TimerDuration.TotalSeconds -lt $Timeout) {
                 $TimerDuration = [DateTime]::Now - $TimerStart
-                If ($Host.UI.RawUI.KeyAvailable) {
-                    [Byte]$KeyCode = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
-                    Break
+                If ($Prompt) {
+                    Switch ([Math]::Abs([Math]::Ceiling($Timeout - $TimerDuration.TotalSeconds))) {
+                        $SecondsLeft {Break}
+                        Default {
+                            [String]$_Prompt       = $Prompt -Replace '\$Timeout', "$_"
+                            $PromptSplat['Object'] = $_Prompt
+                            If ($ClearPrompt.Length - $NoNewline.IsPresent -ne $_Prompt.Length) {
+                                [String[]]$ClearLines = @()
+                                ForEach ($PromptLine in $_Prompt -Split "`n") {$ClearLines += ' ' * $PromptLine.Length}
+                                [String]$ClearPrompt = $ClearLines -Join "`n"
+                                If (!$NoNewline.IsPresent) {$ClearProimpt += "`n"}
+                                [Console]::SetCursorPosition($OriginalCursorPos.X, $OriginalCursorPos.Y)
+                                Write-Host -NoNewline $ClearPrompt
+                            }
+                            [Console]::SetCursorPosition($OriginalCursorPos.X, $OriginalCursorPos.Y)
+                            Write-Host @PromptSplat
+                            $SecondsLeft = $_
+                            Break
+                        }
+                    }
                 }
+                If ($Host.UI.RawUI.KeyAvailable) {[Byte]$KeyCode = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode; Break}
                 Start-Sleep -Milliseconds $RefreshRateMs
             }
-
-            [Byte]$KeyPress = Switch (13) {# [Enter]
-                {$KeyCode}        {$KeyCode; Write-Log INFO "Keypress received: $KeyCode"; Break}
-                {$DefaultKeyCode} {$DefaultKeyCode; Write-Log INFO "Timed out. Using default keypress: $DefaultKeyCode"; Break}
-                Default           {$_; Write-Log INFO "Timed out. Default keypress undefined, using: $_";Break}
-            }
+            [Byte]$KeyPress = If ($Null -eq $KeyCode) {Write-Log INFO "Timed out. Using default keypress: $DefaultKeyCode"; $DefaultKeyCode} Else {Write-Log INFO "Keypress received: $KeyCode"; $KeyCode}
         }
         Else {
             Write-Log INFO 'Awaiting key press...'
@@ -741,12 +722,17 @@ Function Sync-Ets2ModRepo {
             Write-Log INFO "Keypress received: $KeyPress"
         }
 
-        If ($Clear.IsPresent) {
+        If ($Clear.IsPresent -And $Prompt) {
+            If ($ClearPrompt.Length - $NoNewline.IsPresent -ne $PromptSplat.Object.Length) {
+                [String[]]$ClearLines = @()
+                ForEach ($PromptLine in $PromptSplat.Object -Split "`n") {$ClearLines += ' ' * $PromptLine.Length}
+                [String]$ClearPrompt = $ClearLines -Join "`n"
+            }
             [Console]::SetCursorPosition($OriginalCursorPos.X, $OriginalCursorPos.Y)
-            Write-Host -NoNewline ($Prompt -Replace '.', ' ')
+            Write-Host -NoNewline $ClearPrompt
             [Console]::SetCursorPosition($OriginalCursorPos.X, $OriginalCursorPos.Y)
         }
-
+        
         Return $KeyPress
     }
 
@@ -1125,7 +1111,7 @@ Function Sync-Ets2ModRepo {
             Do {[Byte]$UserInput = Read-KeyPress ' Open Workshop item page in Steam? [Y/N]' -Clear} Until ($UserInput -In [Byte[]][Char[]]'YN')
             
             Switch ($UserInput) {
-                ([Byte][Char]'Y') {ForEach ($Mod in $MissingWorkshopMods) {Start-SteamWorkshopPage $Mod; Wait-KeyPress 'Press any key to continue...' -Clear}}
+                ([Byte][Char]'Y') {ForEach ($Mod in $MissingWorkshopMods) {Start-SteamWorkshopPage $Mod; [Void](Read-KeyPress ' Press any key to continue...' -Clear)}}
                 ([Byte][Char]'N') {Break}
             }
         }
@@ -1301,7 +1287,7 @@ Function Sync-Ets2ModRepo {
 
             Do {
                 [Bool]$UpdateSelection = $False
-                Switch (Read-KeyPress -Clear) {
+                Switch (Read-KeyPress) {
                     13 { # [ENTER]
                         Clear-Host
                         If ($SelectedProfile -ne $PreviousProfile) {
@@ -1383,21 +1369,12 @@ Function Sync-Ets2ModRepo {
     }
 
     Function Show-LandingScreen {
-        [CmdletBinding()]
-        Param (
-            [String]$Prompt  = 'Continuing in $Timeout seconds. Press any key to skip...',
-            [UInt16]$Timeout = 5
-        )
-
-        $Prompt = $Prompt -Replace '\$Timeout', "$Timeout"
-        Write-Log INFO "Displaying landing screen with continuation prompt '$Prompt' and timeout of $Timeout."
-
         Write-Host ($G__UILine * [Console]::BufferWidth)
         Write-Host "`n$G__UITab$($G__ScriptDetails.Title)`n"
         Write-Host "$G__UITab$($G__ScriptDetails.Version), Updated $($G__ScriptDetails.VersionDate)"
         Write-Host "$G__UITab$($G__ScriptDetails.Copyright) - $($G__ScriptDetails.Author)`n"
 
-        [Void](Read-KeyPress $Prompt -Timeout $Timeout -DefaultKeyCode 13 -Clear)
+        [Void](Read-KeyPress " Continuing in `$Timeout seconds. Press any key to skip..." -Timeout 3 -DefaultKeyCode 13 -Clear)
     }
 
     Function Invoke-Menu {
@@ -1483,21 +1460,29 @@ Function Sync-Ets2ModRepo {
         Write-HostFancy "   $G__UITab$(('', "WARNING: Deleted mods must be reaquired if reactivated in the future.`n")[$G__DeleteDisabled])" -ForegroundColor Yellow
 
         While ($True) {
-            [Byte]$Choice = Read-KeyPress -Clear
-            # 9  - Execute (Update all mods)
-            # 13 - Execute (Update based on load order only)
-            # 27 - Exit
-            # 32 - No update
-            # 48 - Change profile
-            # 49 - Start game
-            # 50 - Start save editor
-            # 51 - Delete inactive mods
-            # 52 - Validate install
-            # 53 - Skip load order config
-            # 54 - Save options
-            # 55 - Export load order
-            # 56 - Import load order
-            # 57 - Change load order
+            [Byte]$Choice = Read-KeyPress
+            #--------------------- NUM LOCK ON
+            # KEY    CODE  DESCRIPTION
+            # TAB   / 9  - Execute (Update all mods)
+            # ENTER / 13 - Execute (Update based on load order only)
+            # ESC   / 27 - Exit
+            # SPACE / 32 - No update
+            # 0     / 48 - Change profile
+            # 1     / 49 - Start game
+            # 2     / 50 - Start save editor
+            # 3     / 51 - Delete inactive mods
+            # 4     / 52 - Validate install
+            # 5     / 53 - Skip load order config
+            # 6     / 54 - Save options
+            # 7     / 55 - Export load order
+            # 8     / 56 - Import load order
+            # 9     / 57 - Change load order
+            # TODO: Implement NumLk toggle for additional options
+            #--------------------- NUM LOCK OFF
+            # NUM1  / 35 - Toggle/set log retention
+            # NUM2  / 40 - Toggle auto backups
+            # NUM3  / 34 - Switch target game
+            # NUM4  / 37 - Set Repository URL
             Switch ($Choice) {
                 9  {Write-Log INFO "$Choice : [TAB] ('Execute (Update all)') selected."          # [TAB]
                     If ($G__OfflineMode) {Write-Log WARN "Aborted: Choice invalid in offline mode."; Break}
@@ -1551,10 +1536,10 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory, Position = 0)][String]$Prompt,
             [Parameter(Position = 1)][ConsoleColor]$ForegroundColor = [Console]::ForegroundColor
         )
-
+        
         Write-Host -ForegroundColor $ForegroundColor $Prompt
         While ($True) {
-            Switch (Read-KeyPress -Clear) {
+            Switch (Read-KeyPress) {
                 ([Byte][Char]'N') {Return $False} # 78
                 ([Byte][Char]'Y') {Return $True}  # 89
                 Default           {Break}         # Invalid
@@ -2018,7 +2003,7 @@ Function Sync-Ets2ModRepo {
 
             Do {
                 [Bool]$UpdateSelection = $False
-                Switch (Read-KeyPress -Clear) {
+                Switch (Read-KeyPress) {
                     13 { # [ENTER]
                         [String]$ConfirmedSelection = ($PreviousLoadOrder, $SelectedLoadOrder)[$SelectedLoadOrder -ne $PreviousLoadOrder]
                         Write-Log INFO "Selection confirmed: '$ConfirmedSelection'"
@@ -2573,7 +2558,7 @@ Function Sync-Ets2ModRepo {
                 Wait-WriteAndExit ' Unable to retrieve repository information. No offline data available.'
             }
             Write-Host -ForegroundColor Yellow ' Unable to retrieve repository information. Using cached data. Some features may be limited or unavailable.'
-            Wait-KeyPress ' ' -Clear
+            [Void](Read-KeyPress)
         }
     }
 
@@ -2616,7 +2601,7 @@ Function Sync-Ets2ModRepo {
         Title       = ($Null, '[Experimental] ')[$G__IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
         Version     = "Version $G__ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $G__Revision)")[$G__IsExperimental]
-        VersionDate = '2024.11.7'
+        VersionDate = '2024.11.8'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
@@ -2626,35 +2611,33 @@ Function Sync-Ets2ModRepo {
         "3.7.0$(($Null, ' (EXPERIMENTAL)')[$G__IsExperimental])",
         '',
         '- Added experimental support for American Truck Simulator (ATS).',
+        '- Added secondary menu for additional options accessible by pressing Num Lock [NUMLK].',
+        '  * Added menu option for toggling deletion of expired logs or setting log retention time.',
+        '  * Added menu option for toggling automatic profile backups.',
+        '  * Added menu option for manually setting repository URL.',
+        '  * Added menu option for switching target sim.',
         '- Added internal support for experimental versions.',
-        '- Added option to set retention time or toggle deletion of old logs.',
-        '- Added option to toggle automatic profile backups.',
+        '- Added live countdown timer for keypress prompts.',
         '',
-        '- Fixed text collision between Repository URL prompt and loading screen information.',
-        '- Fixed keypress prompts with timeouts not skipping.',
-        '- Fixed first time profile selection menu starting while the script was still loading.',
-        '- Fixed crash when selecting "Import load order" from the main menu.',
-        '- Fixed uncommanded menu selections due to input buffering outside active prompts.',
+        '- Fixed crash upon selecting "Import load order" from the main menu.',
+        '- Fixed uncommanded menu and prompt interactions when input was provided without an active prompt.',
+        '- Fixed first-time profile selection menu starting before the script had finished loading.',
+        '- Fixed text collisions between Repository URL prompt and loading screen information.',
+        '- Fixed keypress prompts with timeouts not timing out.',
         '- Fixed repository downloader not supporting HTTPS in UseIWR mode.',
         '- Fixed TLS 1.2 not being enforced for repository communication.',
         '',
         '- Improved overall script performance.',
-        '- Improved appearance of the Repository URL prompt.',
+        '- Improved file I/O performance.',
+        '- Improved keypress prompt interactivity.',
+        '- Improved loading screen layout and information.',
+        '- Improved Repository URL prompt appearance.',
+        '- Improved log timestamp accuracy.',
+        '- Improved log formatting and readability.',
         '- Improved type definition and assembly importing.',
-        '- Improved interactivity of keypress prompts.',
-        '- Improved loading screen layout information.',
-        '- Improved accuracy of log entries.',
         '',
         '- Changed script name to "TruckSim External Mod Manager" (TSExtModMan) to reflect addition of ATS support.',
-        '- Changed log entry chronology. (Reversed from bottom-to-top).'<#,
-        '',
-        '3.6.1',
-        '- Added detailed information to loading screen.',
-        '- Fixed issue causing empty active load order exports.',
-        '- Fixed issue causing script slowdowns if the log file gets too big. Logs now generate per session.',
-        '- Improved loading times.',
-        '- Improved event logging.',
-        '- Stability improvements.'#>
+        '- Changed log entry chronology. (Reversed from bottom-to-top).'
     )
     [String[]]$G__KnownIssues = @(
         '- Automatic moving of the script if misplaced does not work.',
@@ -2670,7 +2653,7 @@ Function Sync-Ets2ModRepo {
     Write-Host -ForegroundColor Green "`n$($T__Tab * 4)Loading complete. ($T__TotalLoadTime sec.)"
     Write-Log INFO "Loading complete. Load time: $T__TotalLoadTime sec."
 
-    [Void](Read-KeyPress "`n$($T__Tab * 4)Continuing in 5 seconds. Press any key to skip..." -Timeout 5 -DefaultKeyCode 13 -Clear)
+    [Void](Read-KeyPress "`n$($T__Tab * 4)Continuing in `$Timeout seconds. Press any key to skip..." -Timeout 2 -DefaultKeyCode 13 -Clear)
 
     (Get-Variable "T__*" -EA 0).Name | Remove-Variable -EA 0
 
@@ -2749,7 +2732,7 @@ Function Sync-Ets2ModRepo {
 
                 Write-Host ("`n`n What's new:`n   " + ($G__UpdateNotes -Join "`n   ") + "`n")
                 If ($G__KnownIssues) {Write-Host ("`n Known issues:`n   " + ($G__KnownIssues -Join "`n   ") + "`n")}
-                Wait-KeyPress ' Press any key to continue.' -Clear
+                [Void](Read-KeyPress ' Press any key to continue.' -Clear)
                 
                 Clear-Host
             }
@@ -2757,7 +2740,7 @@ Function Sync-Ets2ModRepo {
                 Write-Log ERROR "SelfUpdater : $($_.Exception.Message)"
                 Write-Host -ForegroundColor Red (Format-AndExportErrorData $_)
                 Write-Host "`n"
-                Wait-KeyPress ' Press any key to continue.' -Clear
+                [Void](Read-KeyPress ' Press any key to continue.' -Clear)
                 Clear-Host
             }
         }
@@ -2767,7 +2750,7 @@ Function Sync-Ets2ModRepo {
         Write-Host -ForegroundColor Green $Updated
         Write-Host ("`n What's new:`n   " + ($G__UpdateNotes -Join "`n   ") + "`n")
         If ($G__KnownIssues) {Write-Host ("`n Known issues:`n   " + ($G__KnownIssues -Join "`n   ") + "`n")}
-        Wait-KeyPress ' Press any key to continue.' -Clear
+        [Void](Read-KeyPress ' Press any key to continue.' -Clear)
         Clear-Host
     }
 
@@ -2800,7 +2783,7 @@ Function Sync-Ets2ModRepo {
 
         Write-Host -ForegroundColor Green "`n Done`n"
         Write-Log INFO 'Session complete. Waiting for user input.'
-        Wait-KeyPress
+        [Void](Read-KeyPress)
         Unprotect-Variables
 
         Write-Log INFO 'Exiting session.'
@@ -2905,9 +2888,17 @@ Function Sync-Ets2ModRepo {
 
         [ModUpdateState]$Status = ([Bool]$LocalMod.Version, [IO.File]::Exists($CurrentMod.FileName) | Group-Object | Where-Object {$_.Name -eq 'True'}).Count
         Switch ($Status) {
-            0 {Write-Host -NoNewline '---'.PadRight($L_LongestVersion)}
-            1 {$Repair = ([ModRepairAction]::File, [ModRepairAction]::Entry)[[Bool]$LocalMod.Version]; Write-Host -NoNewline -ForegroundColor Red ('???', $LocalMod.VersionStr)[[Bool]$LocalMod.Version].PadRight($L_LongestVersion)}
-            2 {Write-Host -NoNewline $LocalMod.VersionStr.PadRight($L_LongestVersion)}
+            'Installing' {Write-Host -NoNewline '---'.PadRight($L_LongestVersion); Break}
+            'Repairing'  {$Repair = ([ModRepairAction]::File, [ModRepairAction]::Entry)[![Bool]$LocalMod.Version]; Write-Host -NoNewline -ForegroundColor Red ('???', $LocalMod.VersionStr)[[Bool]$LocalMod.Version].PadRight($L_LongestVersion); Break}
+            'Updating'   {Write-Host -NoNewline $LocalMod.VersionStr.PadRight($L_LongestVersion); Break}
+            Default      {Write-Log WARN "'$($CurrentMod.Name)' : Unexpected ModUpdateState '$State'."; Write-Host -NoNewline '???'.PadRight($L_LongestVersion); Break}
+        }
+        
+        Switch ($Repair) {
+            'None'  {Write-Log INFO "'$($CurrentMod.Name)' : No local problems detected."; Break}
+            'Entry' {Write-Log WARN "'$($CurrentMod.Name)' : Problem detected in local version data: No corresponding version data for existing file. Entry repair required."; Break}
+            'File'  {Write-Log WARN "'$($CurrentMod.Name)' : Problem detected in local mod storage: Version data references missing file. Redownload required."; Break}
+            Default {Write-Log WARN "'$($CurrentMod.Name)' : Unexpected ModRepairAction '$Repair'."; Break}
         }
 
         [ConsoleColor]$VersionColor = ([ConsoleColor]::Green, [ConsoleColor]::White)[($LocalMod.Version -ge $CurrentMod.Version)]
@@ -2922,14 +2913,6 @@ Function Sync-Ets2ModRepo {
             Continue
         }
 
-        If ($CurrentMod.FileName -NotIn $G__ActiveModFiles -And !$G__UpdateAll) {
-            Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Not in load order."
-            Write-Host -ForegroundColor DarkGray 'Skipped - Not in load order'
-
-            If (!$G__DeleteDisabled) {$NewVersions += ($CurrentMod.Name, $CurrentMod.VersionStr) -Join '='}
-
-            Continue
-        }
         [UInt16]$XPos        = [Console]::CursorLeft
         [Hashtable]$WhXSplat = @{
             X       = $XPos
@@ -2937,11 +2920,22 @@ Function Sync-Ets2ModRepo {
             Newline = $True
         }
 
-        If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -eq [ModRepairAction]::File) {
-            Write-Host -NoNewline ("$([ModUpdateState]::Validating)...", "$Status...")[[Bool]$Repair] #[ModUpdateState]::Validating
+        If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -eq 'File') {
+
+            If ($CurrentMod.FileName -NotIn $G__ActiveModFiles -And !$G__UpdateAll) {
+                If ($Repair -eq 'File')  {Write-Log WARN "'$($CurrentMod.Name)' : Cannot perform repair - The file was skipped (not in load order)."}
+                Else                     {Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Not in load order."}
+                Write-Host -ForegroundColor DarkGray 'Skipped - Not in load order'
+    
+                If (!$G__DeleteDisabled) {$NewVersions += ($CurrentMod.Name, $CurrentMod.VersionStr) -Join '='}
+    
+                Continue
+            }
+
+            Write-Host -NoNewline ("$([ModUpdateState]::Validating)...", "$Status...")[$Repair -ne 'None'] #[ModUpdateState]::Validating
 
             If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {
-                If (![Bool]$Repair) {
+                If ($Repair -eq 'None') {
                     Write-Log WARN "'$($CurrentMod.Name)' : Validation failed. Reinstalling."
                     Write-HostX $XPos -Color Red 'Validation failed.'
                     $Status = [ModUpdateState]::Reinstalling
@@ -2952,7 +2946,7 @@ Function Sync-Ets2ModRepo {
                 Catch {[Hashtable]$LocalMod = @{Version = [Version]'0.0'}}
             }
             Else {
-                [String]$ResultString = ('Up to date', 'Repaired')[[Bool]$Repair]
+                [String]$ResultString = ('Up to date', 'Repaired')[$Repair -ne 'None']
                 Write-Log INFO "'$($CurrentMod.Name)': $ResultString"
                 Write-HostX @WhXSplat $ResultString
 
@@ -2961,12 +2955,23 @@ Function Sync-Ets2ModRepo {
                 If ([Bool]$Repair) {$Successes++}
 
                 Continue
-            };write-hostx -
+            }
         }
-        If ($LocalMod.Version -lt $CurrentMod.Version -Or [Bool]$Repair) {
+        If ($LocalMod.Version -lt $CurrentMod.Version -Or $Repair -eq 'Entry') {
             Try {
                 Write-HostX $XPos 'Preparing...'
                 If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {
+
+                    If ($CurrentMod.FileName -NotIn $G__ActiveModFiles -And !$G__UpdateAll) {
+                        If ($Repair -eq 'File')  {Write-Log WARN "'$($CurrentMod.Name)' : Cannot perform repair - The file was skipped (not in load order)."}
+                        Else                     {Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Not in load order."}
+                        Write-HostX $XPos -Color DarkGray 'Skipped - Not in load order' -Newline
+            
+                        If (!$G__DeleteDisabled) {$NewVersions += ($CurrentMod.Name, $CurrentMod.VersionStr) -Join '='}
+            
+                        Continue
+                    }
+
                     If (Test-ModActive $CurrentMod.Name) {Throw [IO.IOException]::New("Close $G__GameName to update this mod.")}
 
                     Write-Log INFO "'$($CurrentMod.Name)': Downloading."
@@ -2983,14 +2988,17 @@ Function Sync-Ets2ModRepo {
                     If ($OldFile.Exists) {$OldFile.Delete()}
 
                     Switch ($Status) {
-                        0 {Write-HostX @WhXSplat "Installed      ($Result)"}
-                        1 {Write-HostX @WhXSplat "Repaired       ($Result)"}
-                        2 {Write-HostX @WhXSplat "Updated        ($Result)"}
-                        4 {Write-HostX @WhXSplat "Reinstalled    ($Result)"}
-                        
+                        'Installing'   {Write-HostX @WhXSplat "Installed      ($Result)"; Break}
+                        'Repairing'    {Write-HostX @WhXSplat "Repaired       ($Result)"; Break}
+                        'Updating'     {Write-HostX @WhXSplat "Updated        ($Result)"; Break}
+                        'Reinstalling' {Write-HostX @WhXSplat "Reinstalled    ($Result)"; Break}
+                        Default        {Write-HostX @WhXSplat "Unknown        ($Result)"; Break}
                     }
                 }
-                Else {Write-HostX @WhXSplat 'Repaired       '}
+                Else {
+                    If ($Repair -eq 'Entry') {Write-Log INFO "'$($CurrentMod.Name)': Entry repair successful."}
+                    Write-HostX @WhXSplat 'Repaired       '
+                }
 
                 Write-Log INFO "'$($CurrentMod.Name)': Processed successfully. $Result"
                 
@@ -3099,7 +3107,7 @@ Function Sync-Ets2ModRepo {
     Write-Host "`n"
     Write-Log INFO 'Session completed. Waiting for user input before continuing to OnExit tasks.'
 
-    Wait-KeyPress " Press any key to$(('', " launch $G__GameNameShort $(('', "+ $($G__TSSETool.Name) ")[$G__StartSaveEditor])and")[$G__StartGame]) exit"
+    [Void](Read-KeyPress " Press any key to$(('', " launch $G__GameNameShort $(('', "+ $($G__TSSETool.Name) ")[$G__StartSaveEditor])and")[$G__StartGame]) exit")
     If ($Successes + $Failures -eq 0 -And $G__StartGame) {
         If ($G__GameProcess -NotIn (Get-Process).Name) {
             Start-Process "steam://launch/$G__GameAppID"
