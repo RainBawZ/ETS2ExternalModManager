@@ -9,7 +9,7 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=81;
+#NUM_experimental=100;
 #STR_targetgame=;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
@@ -20,7 +20,7 @@
 
 <#
 
-    COPYRIGHT © 2024 RainBawZ
+    COPYRIGHT © 2025 RainBawZ
 
     Permission is hereby granted, free of charge, to any person obtaining a copy of this software
     and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -38,11 +38,13 @@
 
 #>
 
-# FIXME: File reading is wonky
+# TODO: File reading is wonky, gotta unwonk somehow
 # TODO: Add cross-platform (Windows/Linux) compatibility
 # TODO: Add core mod management (dll/injector mods) - Install-CoreMod
 # TODO: Implement Test-GameConfiguration
 # TODO: Fix self-restart
+# TODO: Improve GUI/Form functionality and layout
+# TODO: Fix jank when missing TS SE Tool
 
 Param (
     [Parameter(Position = 0)][String]$InputParam,
@@ -383,6 +385,230 @@ Function Sync-Ets2ModRepo {
         Set-UTF8Content $G__SessionLog $LogData -Append -NoLog
 
         Return ($Details, $Message)[$Message.Length -gt $Details.Length]
+    }
+
+    Function Get-FileEncoding {
+        [CmdletBinding()]
+        Param (
+            [Parameter(Mandatory, Position = 0)][IO.FileInfo]$Path,
+            [Parameter(Position = 1)][UInt32]$SampleSize = 1MB
+        )
+
+        Function Test-ValidUTF8 {
+            [CmdletBinding()]
+            [OutputType([Bool])]
+
+            Param ([Byte[]]$Data)
+
+            # UTF-8 (No BOM, ThrowOnInvalidBytes)
+            [Text.UTF8Encoding]$UTF8Strict = [Text.UTF8Encoding]::New($False, $True)
+
+            Try   {[Void]$UTF8Strict.GetString($Data); Return $True}
+            Catch {Return $False}
+        }
+        Function Get-ASCIIRatio {
+            [CmdletBinding()]
+            [OutputType([Double])]
+
+            Param ([Byte[]]$Data)
+
+            If ($Data.Count -eq 0) {Return 1.0}
+
+            [Double]$Ratio = ($Data | Where-Object {$_ -lt 128}).Count / $Data.Count
+            Return $Ratio
+        }
+        Function Test-Binaryish {
+            [CmdletBinding()]
+            [OutputType([Bool])]
+
+            Param ([Byte[]]$Data)
+
+            If ($Data.Count -eq 0) {Return $False}
+            
+            [Double]$NullRatio = ($Data | Where-Object {$_ -eq 0}).Count / $Data.Count
+            [Double]$CtrlRatio = ($Data | Where-Object {$_ -lt 9 -Or ($_ -gt 13 -And $_ -lt 32)}).Count / $Data.Count
+
+            Return ($NullRatio -ge 0.3 -Or $CtrlRatio -ge 0.3)
+        }
+        Function Detect-UTF16Pattern {
+            [CmdletBinding()]
+            [OutputType([String])]
+
+            Param ([Byte[]]$Data)
+
+            If ($Data.Count -lt 4) {Return $Null}
+
+            [UInt16]$EvenZero, [UInt16]$OddZero = 0, 0
+
+            For ([UInt32]$Index = 0; $Index -lt $Data.Count; $Index++) {If ($Data[$Index] -eq 0) {If ($Index % 2 -eq 0) {$EvenZero++} Else {$OddZero++}}}
+
+            [UInt32]$Pairs = [Math]::Floor($Data.Count / 2)
+
+            If ($Pairs -eq 0) {Return $Null}
+
+            [Double]$EvenRatio = $EvenZero / $Pairs
+            [Double]$OddRatio  = $OddZero  / $Pairs
+
+            If ($EvenRatio -ge 0.4 -Or $OddRatio -ge 0.4) {Return ('UTF-16 LE', 'UTF-16 BE')[$OddRatio -gt $EvenRatio]}
+            
+            Return $Null
+        }
+        Function Detect-UTF32Pattern {
+            [CmdletBinding()]
+            [OutputType([String])]
+
+            Param ([Byte[]]$Data)
+
+            If ($Data.Count -lt 8) {Return $Null}
+
+            [UInt16]$Groups = [Math]::Floor($Data.Count / 4)
+            If ($Groups -lt 2) {Return $Null}
+
+            [UInt16]$ZeroTriplets = 0
+
+            For ([UInt16]$Group = 0; $Group -lt $Groups; $Group++) {
+
+                [UInt32]$Index  = $Group * 4
+                [UInt16]$Zeroes = 0
+
+                If ($Data[$Index] -eq 0)     {$Zeroes++}
+                If ($Data[$Index + 1] -eq 0) {$Zeroes++}
+                If ($Data[$Index + 2] -eq 0) {$Zeroes++}
+                If ($Data[$Index + 3] -eq 0) {$Zeroes++}
+                If ($Zeroes -ge 3)           {$ZeroTriplets++}
+            }
+            If ($ZeroTriplets / $Groups -gt 0.25) {Return 'UTF-32'}
+            Return $Null
+        }
+        Function Check-BOM {
+            [CmdletBinding()]
+            [OutputType([String])]
+
+            Param ([Byte[]]$Data)
+
+            [String]$HexString = ''
+            ForEach ($Byte in $Data[0..4]) {$HexString += ([UInt16]$Byte).ToString('X2')}
+
+            If ($Data.Count -ge 3 -And $HexString.StartsWith('2B2F76'))   {Return 'UTF-7'}
+            If ($Data.Count -ge 3 -And $HexString.StartsWith('EFBBBF'))   {Return 'UTF-8 BOM'}
+            If ($Data.Count -ge 2 -And $HexString.StartsWith('FFFE'))     {Return 'UTF-16 LE BOM'}
+            If ($Data.Count -ge 2 -And $HexString.StartsWith('FEFF'))     {Return 'UTF-16 BE BOM'}
+            If ($Data.Count -ge 4 -And $HexString.StartsWith('FFFE0000')) {Return 'UTF-32 LE BOM'}
+            If ($Data.Count -ge 4 -And $HexString.StartsWith('0000FEFF')) {Return 'UTF-32 BE BOM'}
+
+            Return $Null
+        }
+
+        [Hashtable]$EncodingMap = @{
+            'UTF-32 BE BOM' = [Text.UTF32Encoding]::New($True, $True)
+            'UTF-32 LE BOM' = [Text.UTF32Encoding]::New($False, $True)
+            'UTF-32 BE'     = [Text.UTF32Encoding]::New($True, $False)
+            'UTF-32 LE'     = [Text.UTF32Encoding]::New($False, $False)
+            'UTF-16 BE BOM' = [Text.UnicodeEncoding]::New($False, $True)
+            'UTF-16 LE BOM' = [Text.UnicodeEncoding]::New($True, $True)
+            'UTF-16 BE'     = [Text.UnicodeEncoding]::New($False, $False)
+            'UTF-16 LE'     = [Text.UnicodeEncoding]::New($True, $False)
+            'UTF-8 BOM'     = [Text.UTF8Encoding]::New($True)
+            'UTF-8'         = [Text.UTF8Encoding]::New($False)
+            'UTF-7'         = [Text.UTF7Encoding]::New()
+            'ASCII'         = [Text.ASCIIEncoding]::New()
+            'ANSI'          = [Text.Encoding]::Default
+        }
+
+        [IO.FileStream]$FileStream = [IO.File]::OpenRead($Path.FullName)
+        Try {
+            [UInt32]$BufferSize = [Math]::Min($SampleSize, [Int]$FileStream.Length)
+            [Byte[]]$Buffer     = [Byte[]]::New($BufferSize)
+            [Void]$FileStream.Read($Buffer, 0, $BufferSize)
+        }
+        Finally {$FileStream.Dispose()}
+        
+        [String]$Preamble = Check-BOM $Buffer
+        If ($Preamble) {
+            Write-Log INFO "Identified BOM signature in '$($Path.Name)'. Assumed encoding: '$Preamble'; Confidence: High."
+            Return [PSCustomObject]@{
+                Path       = $Path
+                Encoding   = $Preamble
+                Instance   = $EncodingMap[$Preamble]
+                Confidence = 'High'
+                Details    = 'Identified BOM signature.'
+            }
+        }
+
+        If (Test-Binaryish $Buffer) {
+            Write-Log INFO "Detected high number of NUL/control bytes in '$($Path.Name)'. Assumed encoding: Unknown/Binary/Mixed; Confidence: Low:"
+            Return [PSCustomObject]@{
+                Path       = $Path
+                Encoding   = 'Unknown/Binary/Mixed'
+                Instance   = $Null
+                Confidence = 'Low'
+                Details    = 'Detected high number of NUL/control bytes.'
+            }
+        }
+
+        [String]$UTF32Guess = Detect-UTF32Pattern $Buffer
+        If ($UTF32Guess) {
+            Write-Log INFO "Detected repeating 3-of-4 NUL-byte pattern in '$($Path.Name)'. Assumed encoding: '$UTF32Guess'; Confidence: Medium."
+            Return [PSCustomObject]@{
+                Path       = $Path
+                Encoding   = $UTF32Guess
+                Instance   = $EncodingMap[$UTF32Guess]
+                Confidence = 'Medium'
+                Details    = 'Detected repeating 3-of-4 NUL-byte pattern indicating UTF-32 encoding.'
+            }
+        }
+
+        [String]$UTF16Guess = Detect-UTF16Pattern $Buffer
+        If ($UTF16Guess) {
+            Write-Log INFO "Detected every-other-byte NUL pattern in '$($Path.Name)'. Assumed encoding: '$UTF16Guess'; Confidence: Medium."
+            Return [PSCustomObject]@{
+                Path       = $Path
+                Encoding   = $UTF16Guess
+                Instance   = $EncodingMap[$UTF16Guess]
+                Confidence = 'Medium'
+                Details    = 'Detected every-other-byte NUL pattern indicating UTF-16 encoding.'
+            }
+        }
+
+        [Bool]$IsUTF8       = Test-ValidUTF8 $Buffer
+        [Double]$ASCIIRatio = Get-ASCIIRatio $Buffer
+
+        If ($IsUTF8) {
+            If ($ASCIIRatio -ge 1.0) {
+                Write-Log INFO "All bytes < 0x80 in '$($Path.Name)'. Assumed encoding: 'ASCII'; Confidence: High."
+                Return [PSCustomObject]@{
+                    Path       = $Path
+                    Encoding   = 'ASCII'
+                    Instance   = $EncodingMap['ASCII']
+                    Confidence = 'High'
+                    Details    = 'All bytes < 0x80; ASCII subset.'
+                }
+            }
+            Else {
+                Write-Log INFO "Successfully performed strict UTF-8 decoding of all byte sequences in '$($Path.Name)'. Assumed encoding: 'UTF-8'; Confidence: Medium."
+                Return [PSCustomObject]@{
+                    Path       = $Path
+                    Encoding   = 'UTF-8'
+                    Instance   = $EncodingMap['UTF-8']
+                    Confidence = 'Medium'
+                    Details    = 'Passes strict UTF-8 decoding without errors.'
+                }
+            }
+        }
+
+        [Text.Encoding]$ANSI = $EncodingMap['ANSI']
+        [Int]$CodePage       = $ANSI.CodePage
+        [String]$Name        = $ANSI.EncodingName
+
+        Write-Log INFO "No UTF-16/32 patterns or valid UTF-8 detected in '$($Path.Name)'. Assumed encoding: 'ANSI (Code Page: $CodePage; $Name)'; Confidence: $(('Medium', 'Low')[$ASCIIRatio -gt 0.95])."
+
+        Return [PSCustomObject]@{
+            Path       = $Path
+            Encoding   = "ANSI (Code Page: $CodePage; $Name)"
+            Instance   = $ANSI
+            Confidence = ('Medium', 'Low')[$ASCIIRatio -gt 0.95]
+            Details    = "Not valid UTF-8, no UTF-16/32 patterns detected. Single-byte code page likely."
+        }
     }
 
     Function Write-Log {
@@ -749,7 +975,7 @@ Function Sync-Ets2ModRepo {
             Write-Log INFO "Awaiting key press. $Timeout second timeout..."
 
             [Double]$Duration = 0
-            [UInt32]$SecsLeft = $Timeout
+            [UInt32]$SecsLeft = $Timeout + 1
             [DateTime]$Start  = [DateTime]::Now
 
             While ($Duration -le $Timeout) {
@@ -803,6 +1029,9 @@ Function Sync-Ets2ModRepo {
             [Console]::SetCursorPosition($InitPos.X, $InitPos.Y)
         }
         
+        $Host.UI.RawUI.FlushInputBuffer()
+        Write-Log INFO 'Flushed input buffer.'
+
         Return $KeyPress
     }
 
@@ -951,6 +1180,7 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO "Received Steam launch options get request for AppID $AppID."
 
+        #FIXME: Automatically get correct userdata directory
         [Collections.Generic.List[String]]$VDFLines = Get-UTF8Content 'K:\GAMES\Steam\userdata\78196472\config\localconfig.vdf'
         [Bool]$SearchingAppID  = $False
         [Int]$Stack            = 0
@@ -1524,7 +1754,7 @@ Function Sync-Ets2ModRepo {
         Write-Host "$G__UITab$($G__ScriptDetails.Version), Updated $($G__ScriptDetails.VersionDate)"
         Write-Host "$G__UITab$($G__ScriptDetails.Copyright) - $($G__ScriptDetails.Author)`n"
 
-        [Void](Read-KeyPress ' Continuing in <n> seconds. Press any key to skip...' -TimerAt '<n>' -Timeout 3 -DefaultKey 13 -Clear)
+        [Void](Read-KeyPress ' Continuing in <n> seconds. Press any key to skip...' -TimerAt '<n>' -Timeout 3 -Clear)
     }
 
     Function Invoke-Menu {
@@ -1650,7 +1880,6 @@ Function Sync-Ets2ModRepo {
             # 7     / 55 - Export load order
             # 8     / 56 - Import load order
             # 9     / 57 - Change load order
-            # TODO: Implement PgUp toggle for additional options
             #--------------------- SECONDARY MENU
             # 1     / 49 - Switch target game
             # 2     / 50 - Set Repository URL
@@ -1712,7 +1941,7 @@ Function Sync-Ets2ModRepo {
                     }
                     Else {
                         Write-Log INFO "$_ : [2] ('Set Repository URL') selected."
-                        Return '$G__RepositoryURL, $G__RepositoryInfo, $_X = Set-RepositoryURL -NoBeep' + $SetAndContinue
+                        Return '$G__RepositoryURL, $G__RepositoryInfo, $_X = Set-RepositoryURL -AllowCancel' + $SetAndContinue
                     }
                 }
                 51 { # [3]
@@ -1807,44 +2036,121 @@ Function Sync-Ets2ModRepo {
 
     Function Set-RepositoryURL {
         [CmdletBinding()]
-        Param ([Switch]$NoBeep)
+        Param ([Switch]$AllowCancel)
 
         Write-Log INFO 'Received Repository URL set request.'
 
-        [Hashtable]$InitPos   = @{X = [Console]::CursorLeft; Y = [Console]::CursorTop}
-        [Hashtable]$PromptPos = @{X = $InitPos.X - 27; Y = $InitPos.Y + 2}
-        [String]$ClearString  = ' ' * ([Console]::BufferWidth - $PromptPos.X)
+        [IntPtr]$ParentHwnd = (Get-Process -ID $PID).MainWindowHandle
+        If ($ParentHwnd -eq [IntPtr]::Zero) {$ParentHwnd = [WindowsApi]::GetForegroundWindow()}
 
-        If (!$NoBeep.IsPresent) {[Console]::Beep(1000, 150)}
+        [Windows.Forms.NativeWindow]$Owner = [Windows.Forms.NativeWindow]::new()
+        $Owner.AssignHandle($ParentHwnd)
 
-        Do {
-            [Console]::SetCursorPosition($PromptPos.X, $PromptPos.Y)
-            
-            $Host.UI.RawUI.FlushInputBuffer()
-            Write-Log INFO 'Flushed input buffer.'
+        [Windows.Forms.Form]$RepositoryURLForm = @{
+            Text          = $G__ScriptDetails.ShortTitle + ' - Set Repository URL'
+            Size          = [Drawing.Size]::New(400, 150)
+            StartPosition = [Windows.Forms.FormStartPosition]::CenterParent
+            ShowInTaskbar = $False
+        }
+        [Windows.Forms.Label]$Label = @{
+            Text     = 'Enter mod repository URL:'
+            AutoSize = $True
+            Location = [Drawing.Point]::New(10, 5)
+            Font     = [Drawing.Font]::New('Segoe UI', 10)
+        }
+        $RepositoryURLForm.Controls.Add($Label)
 
-            Write-Host -NoNewline -ForegroundColor Red -BackgroundColor Yellow ' Enter mod repository URL: '
-            Write-Log INFO 'Prompting for repository URL.'
-
-            [Console]::CursorVisible = $True
-            [String]$NewURL          = Read-Host
-            [Console]::CursorVisible = $False
-
-            Write-Log INFO "Received repository URL: '$NewURL'. Validating."
-            Try   {[PSObject]$RepositoryInfo = Get-RepositoryInfo -RepoURL $NewURL -EA 1; Break}
-            Catch {
-                Write-Log WARN "Invalid repository URL: $($_.Exception.Message). Reprompting."
-                Write-Host -ForegroundColor Red ' No valid repository found for the provided URL. Please try again.'
-                Start-Sleep 2
+        [Windows.Forms.TextBox]$TextBox = @{
+            Size     = [Drawing.Size]::New(300, 20)
+            Location = [Drawing.Point]::New(10, 30)
+        }
+        $RepositoryURLForm.Controls.Add($TextBox)
+        $TextBox.Add_GotFocus({
+            If ($TextBox.Text -eq 'Repository URL') {
+                $TextBox.Text      = ''
+                $TextBox.ForeColor = [Drawing.Color]::Black
             }
-            [UInt16]$LineDiff = [Console]::CursorTop - $PromptPos.Y
-            [Console]::SetCursorPosition($PromptPos.X, $PromptPos.Y)
+        })
+        $TextBox.Add_LostFocus({
+            If ([String]::IsNullOrWhiteSpace($TextBox.Text)) {
+                $TextBox.Text      = 'Repository URL'
+                $TextBox.ForeColor = [Drawing.Color]::Gray
+            }
+        })
 
-            For ([UInt16]$Line = 0; $Line -lt $LineDiff; $Line++) {Write-Host $ClearString}
-            Write-Host -NoNewline $ClearString
-        } While ($True)
-        
-        [Console]::SetCursorPosition($OrigPos.X, $OrigPos.Y)
+        [Windows.Forms.Button]$OKButton = @{
+            Text         = 'OK'
+            #Size         = [Drawing.Size]::New(75, 25)
+            Location     = [Drawing.Point]::New(100, 80)
+            DialogResult = [Windows.Forms.DialogResult]::OK
+        }
+        $RepositoryURLForm.Controls.Add($OKButton)
+
+        [Windows.Forms.Button]$CancelButton = @{
+            Text         = 'Cancel'
+            #Size         = [Drawing.Size]::New(75, 25)
+            Location     = [Drawing.Point]::New(280, 80)
+            DialogResult = [Windows.Forms.DialogResult]::Cancel
+        }
+        $RepositoryURLForm.Controls.Add($CancelButton)
+
+        [Windows.Forms.Button]$TestButton = @{
+            Text     = 'Test'
+            Size     = [Drawing.Size]::New(75, 25)
+            Location = [Drawing.Point]::New(190, 80)
+        }
+        $RepositoryURLForm.Controls.Add($TestButton)
+        $TestButton.Add_Click({
+            [String]$TestURL = $TextBox.Text
+            Write-Log INFO "Repository URL test initiated for '$TestURL'. Validating."
+            Try   {
+                [Void](Get-RepositoryInfo -RepoURL $TestURL -EA 1)
+                Write-Log INFO "Repository URL test successful."
+                [Void][Windows.MessageBox]::Show("A valid repository was found for the provided URL.`nYou may now press 'OK' to set this URL.", 'Valid repository URL', 0, 64)
+            }
+            Catch {
+                Write-Log ERROR "Repository URL test failed: $($_.Exception.Message)."
+                [Void][Windows.MessageBox]::Show("No valid repository found for the provided URL.`nPlease try again.", 'Invalid repository URL', 0, 16)
+            }
+        })
+
+        $RepositoryURLForm.AcceptButton = $OKButton
+        $RepositoryURLForm.CancelButton = $CancelButton
+
+        [Void]$RepositoryURLForm.Add_Shown({
+            $RepositoryURLForm.Activate()
+            $RepositoryURLForm.Topmost = $True
+            $TextBox.Focus()
+        })
+
+        While ($True) {
+
+            Try {
+                Write-Log INFO 'Displaying Repository URL input form.'
+                [Windows.Forms.DialogResult]$DialogResult = $RepositoryURLForm.ShowDialog($Owner)
+            }
+            Finally {$Owner.ReleaseHandle()}
+
+            If ($DialogResult -eq [Windows.Forms.DialogResult]::OK) {
+                [String]$NewURL = $TextBox.Text
+                Write-Log INFO "Repository URL input received: '$NewURL'. Validating."
+                Try   {
+                    [PSObject]$RepositoryInfo = Get-RepositoryInfo -RepoURL $NewURL -EA 1
+                    Break
+                }
+                Catch {
+                    $TextBox.Text = ''
+                    Write-Log ERROR "Invalid repository URL: $($_.Exception.Message)."
+                    [Void][Windows.MessageBox]::Show("No valid repository found for the provided URL.`nPlease try again.", 'Invalid repository URL', 0, 16)
+                }
+            }
+            ElseIf ($DialogResult -eq [Windows.Forms.DialogResult]::Cancel) {
+                Write-Log INFO 'Repository URL input cancelled by user.'
+                If ($AllowCancel.IsPresent) {Return $G__RepositoryURL, $G__RepositoryInfo, 'Cancelled by user.'}
+                Wait-WriteAndExit 'Cannot continue without a valid repository URL.'
+            }
+            Else {Continue} # Invalid dialog result
+        }
 
         Write-EmbeddedValue $G__DataIndices.RepositoryURL.Index $NewURL
         Write-Log INFO "Repository URL set to '$NewURL'"
@@ -1862,6 +2168,7 @@ Function Sync-Ets2ModRepo {
 
         Return $NewURL, $RepositoryInfo, $CacheUpdate
     }
+
     Function Write-HostFancy { #TODO: "This function will be deprecated in a future version"(TM)
         [CmdletBinding()]
         Param (
@@ -2625,6 +2932,29 @@ Function Sync-Ets2ModRepo {
 
         Return $DeletionCount
     }
+
+    Function Set-LogRetentionTime {
+        # WIP
+        [CmdletBinding()]
+        Param ([SByte]$Days)
+
+        # Remove when finished
+        Return $G__LogRetentionDays
+
+        Write-Log INFO 'Received log retention time update request.'
+
+        $Days = Limit-Range $Days -1 ([SByte]::MaxValue)
+        If ($Days -eq $G__LogRetentionDays) {
+            Write-Log INFO "Log retention time is already set to $Days days"
+            Return $G__LogRetentionDays
+        }
+
+        Write-EmbeddedValue $G__DataIndices.LogRetentionDays.Index $Days
+        Write-Log INFO "Log retention time updated from $G__LogRetentionDays to $Days days"
+
+        Return $Days
+    }
+
     Function Import-DotNetTypes {
         [CmdletBinding()]
         Param ([String[]]$Assemblies, [String[]]$TypeDefinitions)
@@ -2946,15 +3276,17 @@ Function Sync-Ets2ModRepo {
         '- Added secondary menu for additional options accessible by pressing Page Up [PG UP].',
         '  * Added menu option for toggling deletion of expired logs or setting log retention time.',
         '  * Added menu option for toggling automatic profile backups.',
-        '  * Added menu option for manually setting repository URL.',
+        '  * Added menu option for changing the mod repository URL.',
         '  * Added menu option for switching target sim.',
         '- Added internal support for experimental versions.',
         '- Added live countdown timer for keypress prompts.',
+        '- Added Repository URL selection GUI.',
+        '',
+        '- Removed Repository URL prompt.',
         '',
         '- Fixed crash upon selecting "Import load order" from the main menu.',
         '- Fixed uncommanded menu and prompt interactions when input was provided without an active prompt.',
         '- Fixed first-time profile selection menu starting before the script had finished loading.',
-        '- Fixed text collisions between Repository URL prompt and loading screen information.',
         '- Fixed keypress prompts with timeouts not timing out.',
         '- Fixed repository downloader not supporting HTTPS in UseIWR mode.',
         '- Fixed TLS 1.2 not being enforced for repository communication.',
@@ -2986,7 +3318,7 @@ Function Sync-Ets2ModRepo {
     Write-Host -ForegroundColor Green "`n$($T__Tab * 4)Loading complete. ($T__TotalLoadTime sec.)"
     Write-Log INFO "Loading complete. Load time: $T__TotalLoadTime sec."
 
-    [Void](Read-KeyPress "`n$($T__Tab * 4)Continuing in <n> seconds. Press any key to skip..." -TimerAt '<n>' -Timeout 3 -DefaultKey 13 -Clear)
+    [Void](Read-KeyPress "`n$($T__Tab * 4)Continuing in <n> seconds. Press any key to skip..." -TimerAt '<n>' -Timeout 3 -Clear)
 
     (Get-Variable "T__*" -EA 0).Name | Remove-Variable -EA 0
 
