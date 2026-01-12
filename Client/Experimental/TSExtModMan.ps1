@@ -9,7 +9,7 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=182;
+#NUM_experimental=184;
 #STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
@@ -1148,6 +1148,43 @@ Function Sync-Ets2ModRepo {
         Return $IsLoaded
     }
 
+    Function Test-FreeDiskSpace {
+        [CmdletBinding()]
+        [OutputType([Bool])]
+
+        Param (
+            [Parameter(Mandatory, Position = 0)]
+            [UInt64]$Size,
+
+            [Parameter(Position = 1)]
+            [Alias('Add')]
+            [UInt64]$Margin = 0,
+
+            [Parameter(Position = 2)]
+            [ValidateRange(1, [UInt64]::MaxValue)]
+            [Alias('Mul')]
+            [UInt64]$Multiplier = 1,
+
+            [String]$Path = $Global:GameRootDirectory
+        )
+
+        Write-Log INFO "Received free disk space check request of $Size bytes for $Path'."
+
+        [IO.DriveInfo]$Drive = [IO.Path]::GetPathRoot($Path)
+
+        Write-Log INFO "Resolved drive for path '$Path' : '$($Drive.Name)', free disk space: $($Drive.AvailableFreeSpace)/$($Drive.TotalSize) bytes."
+
+        [UInt64]$TotalModifier = ($Size * $Multiplier, 0)[$Multiplier -eq 1] + $Margin
+        [UInt64]$TotalSize     = $Size + $TotalModifier
+
+        [Bool]$Result = $Drive.AvailableFreeSpace -ge $TotalSize
+
+        If ($Result) {Write-Log INFO "Disk space check PASSED : Disk space sufficient. Required $Size $(('', "(+$TotalModifier)")[$TotalModifier -ne 0]) bytes."}
+        Else         {Write-Log ERROR "Disk space check FAILED : Insufficient disk space. Required $Size $(('', "(+$TotalModifier)")[$TotalModifier -ne 0]) bytes."}
+    
+        Return $Result
+    }
+
     Function Get-StringHash {
         [CmdletBinding(DefaultParameterSetName = 'String')]
         [OutputType([String])]
@@ -1232,19 +1269,66 @@ Function Sync-Ets2ModRepo {
 
     Function Test-GameConfiguration {
         # TODO: Not yet implemented
-        [CmdletBinding()]
+        [CmdletBinding(DefaultParameterSetName = 'Path')]
         [OutputType([Void])]
 
-        Param ([IO.FileInfo]$ConfigPath = $Global:GameConfigPath)
+        Param (
+            [Parameter(ParameterSetName = 'Path')][IO.FileInfo]$ConfigPath = $Global:GameConfigPath,
+            [Parameter(Mandatory, ParameterSetName = 'String')][String]$RawString
+        )
 
-        [Hashtable]$ConfigData = @{}
+        [Hashtable]$ConfigData                         = @{}
+        [Hashtable]$NewSettings                        = @{}
+        [Collections.Generic.List[String]]$ConfigLines = [Collections.Generic.List[String]]::New()
 
-        ForEach ($Line in Get-FileContent $ConfigPath) {
+        Switch ($PSCmdlet.ParameterSetName) {
+            'Path'   {$ConfigLines.AddRange([String[]](Get-FileContent $ConfigPath)); Break}
+            'String' {$ConfigLines.AddRange($RawString -Split "`n"); Break}
+            Default  {Throw "Invalid parameter set '$_'."}
+        }
+
+        ForEach ($Line in $ConfigLines) {
             If ($Line -NotMatch '^uset ') {Continue}
             $Line = $Line -Replace '(?<=^)uset (?=.*$)', ''
-            [String]$Name, [String]$Value = $Line -Replace '"', '' -Split ' ', 2
-            $ConfigData[$Name]            = $Value
+            [String]$Name, [String]$Value = $Line -Split ' ', 2
+            $ConfigData[$Name]            = $Value.Trim('"')
         }
+
+        If ($ConfigData['g_developer'] -ne '1')         {Write-Log WARN "'g_developer' is not enabled in '$($ConfigPath.Name)'. Console will be unavailable."; $NewSettings['g_developer'] = '1'}
+        Else                                            {Write-Log INFO "'g_developer' is enabled in '$($ConfigPath.Name)'."}
+
+        If ($ConfigData['g_console'] -ne '1')           {Write-Log WARN "'g_console' is not enabled in '$($ConfigPath.Name)'. Console will be unavailable."; $NewSettings['g_console'] = '1'}
+        Else                                            {Write-Log INFO "'g_console' is enabled in '$($ConfigPath.Name)'."}
+
+        If ($ConfigData['g_convoy_allow_load'] -ne '1') {Write-Log WARN "'g_convoy_allow_load' is not enabled in '$($ConfigPath.Name)'. Save loading will be unavailable in convoys."; $NewSettings['g_convoy_allow_load'] = '1'}
+        Else                                            {Write-Log INFO "'g_convoy_allow_load' is enabled in '$($ConfigPath.Name)'."}
+
+        If ($ConfigData['r_buffer_page_size'] -eq '10') {Write-Log WARN "'r_buffer_page_size' is not configured in '$($ConfigPath.Name)'. Stability issues may occur."; $NewSettings['r_buffer_page_size'] = '60'}
+        Else                                            {Write-Log INFO "'r_buffer_page_size' is configured in '$($ConfigPath.Name)'."}
+        
+        Return $NewSettings
+    }
+
+    Function Set-GameConfiguration {
+        [CmdletBinding()]
+        [OutputType([Void])]
+        
+        Param (
+            [Parameter(Mandatory, Position = 0)][Hashtable]$Settings,
+            [IO.FileInfo]$ConfigPath = $Global:GameConfigPath
+        )
+
+        [String]$RawConfig = Get-FileContent $ConfigPath -Raw
+
+        ForEach ($Item in $Settings.GetEnumerator()) {
+            [Regex]$Pattern = '(?m)(?<=^uset\s+' + [Regex]::Escape($Item.Key) + '\s+").*?(?="$)'
+            If ($RawConfig -Match $Pattern) {
+                Write-Log INFO "Updating setting '$($Item.Key)' in '$($ConfigPath.Name)' to '$($Item.Value)'."
+                $RawConfig = $Pattern.Replace($RawConfig, $Item.Value)
+            }
+        }
+
+        Return $RawConfig
     }
     
     Function Wait-WriteAndExit {
@@ -4276,7 +4360,7 @@ Function Sync-Ets2ModRepo {
                         Continue
                     }
 
-                    If ((Get-PSDrive ).Free -lt $CurrentMod.Size) {
+                    If (-Not (Test-FreeDiskSpace $CurrentMod.Size 0 2)) {
                         Write-Log ERROR "'$($CurrentMod.Name)' : Insufficient disk space to perform update. Required: $([Math]::Round($CurrentMod.Size / 1MB, 2)) MB."
                         Write-Host -NoNewline -ForegroundColor Red 'Failed - Insufficient disk space.'.PadRight(48)
                         Write-Host ' ║'
@@ -4353,14 +4437,21 @@ Function Sync-Ets2ModRepo {
         
         [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
         Try {
+            If (-Not (Test-FreeDiskSpace 50MB 0 2)) {Throw 'Insufficient disk space.'}
+
             Write-Log INFO "'$($Global:TsseTool.Name)': Downloading $($Global:TsseTool.Name) archive '$($Global:TsseTool.Archive.Name)'."
+
             [Void](Get-ModRepoFile $Global:TsseTool.Archive.Name -UseIwr -Save)
+
             Write-Log INFO "'$($Global:TsseTool.Name)': Downloaded archive to '$($Global:TsseTool.Archive.FullName)'."
+
             $Global:TsseTool.RootDirectory.Create()
             [System.IO.Compression.ZipFile]::ExtractToDirectory($Global:TsseTool.Archive.FullName, $Global:TsseTool.RootDirectory.FullName)
+
             Write-Log INFO "'$($Global:TsseTool.Name)': Extracted archive '$($Global:TsseTool.Archive.Name)' to directory '$($Global:TsseTool.RootDirectory.FullName)'."
 
             If ($Global:TsseTool.Archive.Exists) {$Global:TsseTool.Archive.Delete()}
+
             $Global:TsseTool['Installed'] = $True
 
             Write-Log INFO "'$($Global:TsseTool.Name)': Installed successfully."
