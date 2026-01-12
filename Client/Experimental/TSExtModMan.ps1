@@ -6,10 +6,10 @@
 #NUM_noconfig=0;
 #STR_loadorder=Default;
 #NUM_editor=0;
-#STR_server=http://example.domain/ets2modrepo;
+#STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=179;
+#NUM_experimental=182;
 #STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
@@ -1546,7 +1546,13 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO 'Received Workshop mod install status request.'
 
-        [Bool]$Result = [IO.Directory]::Exists($ModFolder.FullName)
+        [Bool]$Result = $False
+
+        If ($ModFolder.Exists) {
+            If ($ModFolder.EnumerateFileSystemInfos().Count -eq 0) {Write-Log INFO "Workshop mod folder '$($ModFolder.FullName)' exists but is empty."}
+            Else                                                   {$Result = $True}
+        }
+
         Write-Log INFO "Test for Workshop mod '$ModFolder' returned $Result."
 
         Return $Result
@@ -1885,8 +1891,13 @@ Function Sync-Ets2ModRepo {
             [Console]::SetCursorPosition(5, [Console]::CursorTop)
             Write-Host -ForegroundColor Green 'Already applied'
         }
-        [String[]]$MissingWorkshopMods = ForEach ($Key in $Global:LoadOrderData.Keys | Where-Object {$Global:LoadOrderData[$_].Type -eq 'mod_workshop_package'}) {
-            [Hashtable]$Current = $Global:LoadOrderData[$Key]
+
+        Write-Log INFO 'Checking Workshop subscriptions.'
+        [Collections.Generic.List[String]]$MissingWorkshopMods = [Collections.Generic.List[String]]::New()
+        ForEach ($Item in $Global:LoadOrderData.GetEnumerator()) {
+            [Hashtable]$Current = $Item.Value
+            If ($Current.Type -ne 'Workshop') {Continue}
+
             If (!(Test-WorkshopModInstalled $Current.SourcePath)) {
 
                 Write-Log WARN "Missing workshop subscription: $($Current.Name)"
@@ -1894,8 +1905,9 @@ Function Sync-Ets2ModRepo {
                 [Console]::SetCursorPosition(5, [Console]::CursorTop)
                 Write-Host -ForegroundColor Yellow ('MISSING WORKSHOP SUBSCRIPTION: ' + $Current.Name)
 
-                $Current.SourceName
+                $MissingWorkshopMods.Add($Current.SourceName)
             }
+            Else {Write-Log INFO "Workshop mod '$($Current.Name)' OK."}
         }
         If ($MissingWorkshopMods) {
             Write-Host -NoNewline ('║'.PadRight($UIRowLine.Length - 1) + '║')
@@ -3122,7 +3134,7 @@ Function Sync-Ets2ModRepo {
 
         [UInt16]$DeletedTargets      = 0
         [UInt64]$OldSize             = 0
-        [IO.FileInfo[]]$EnabledFiles = ForEach ($Key in $Global:LoadOrderData.Keys | Where-Object {$Global:LoadOrderData[$_].Type -ne 'mod_workshop_package'}) {[IO.Path]::GetFileName($Global:LoadOrderData[$Key].SourcePath)}
+        [IO.FileInfo[]]$EnabledFiles = ForEach ($Key in $Global:LoadOrderData.Keys | Where-Object {$Global:LoadOrderData[$_].Type -ne 'Workshop'}) {[IO.Path]::GetFileName($Global:LoadOrderData[$Key].SourcePath)}
         [IO.FileInfo[]]$Targets      = ForEach ($File in Get-ChildItem *.scs -File) {$OldSize += $File.Length; If ($File -NotIn $EnabledFiles -And (($File.Name -In $Global:OnlineData.PSObject.Properties.Name -And $Global:DdSel -eq 1) -Or $Global:DdSel -eq 2)) {$File}}
 
         If (!$Targets) {
@@ -3863,7 +3875,7 @@ Function Sync-Ets2ModRepo {
         Title       = ($Null, '[Experimental] ')[$Global:IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
         Version     = "Version $Global:ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $Global:Revision)")[$Global:IsExperimental]
-        VersionDate = '2026.01.05'
+        VersionDate = '2026.01.12'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
@@ -3881,6 +3893,7 @@ Function Sync-Ets2ModRepo {
         '  * Added menu option for adjusting the sample/refresh rate for download speed calculations.',
         '- Added internal support for experimental versions.',
         '- Added live countdown timer for keypress prompts.',
+        '- Added disk space check before downloads.',
         '- Added Repository URL selection GUI.',
         '',
         '- Fixed crash upon selecting "Import load order" from the main menu.',
@@ -4223,7 +4236,7 @@ Function Sync-Ets2ModRepo {
                     Write-Log WARN "'$($CurrentMod.Name)' : Validation failed. Reinstalling."
                     [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                     Write-Host -NoNewline -ForegroundColor Red 'Validation failed.'.PadRight(48)
-                    Write-Host ' ║'
+                    Write-Host -NoNewline ' ║'
                     $Status = [ModUpdateState]::Reinstalling
 
                     Start-Sleep 1
@@ -4260,6 +4273,15 @@ Function Sync-Ets2ModRepo {
             
                         If (!$Global:DeleteDisabled) {$NewVersions += ($CurrentMod.Name, $CurrentMod.VersionStr) -Join '='}
             
+                        Continue
+                    }
+
+                    If ((Get-PSDrive ).Free -lt $CurrentMod.Size) {
+                        Write-Log ERROR "'$($CurrentMod.Name)' : Insufficient disk space to perform update. Required: $([Math]::Round($CurrentMod.Size / 1MB, 2)) MB."
+                        Write-Host -NoNewline -ForegroundColor Red 'Failed - Insufficient disk space.'.PadRight(48)
+                        Write-Host ' ║'
+
+                        $Failures++
                         Continue
                     }
 
