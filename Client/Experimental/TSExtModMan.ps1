@@ -9,7 +9,7 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=184;
+#NUM_experimental=185;
 #STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
@@ -1172,9 +1172,9 @@ Function Sync-Ets2ModRepo {
 
         [IO.DriveInfo]$Drive = [IO.Path]::GetPathRoot($Path)
 
-        Write-Log INFO "Resolved drive for path '$Path' : '$($Drive.Name)', free disk space: $($Drive.AvailableFreeSpace)/$($Drive.TotalSize) bytes."
+        Write-Log INFO "Resolved drive for path '$Path': '$($Drive.Name)' - Free disk space: $($Drive.AvailableFreeSpace)/$($Drive.TotalSize) bytes."
 
-        [UInt64]$TotalModifier = ($Size * $Multiplier, 0)[$Multiplier -eq 1] + $Margin
+        [UInt64]$TotalModifier = (($Size * $Multiplier), 0)[$Multiplier -eq 1] + $Margin
         [UInt64]$TotalSize     = $Size + $TotalModifier
 
         [Bool]$Result = $Drive.AvailableFreeSpace -ge $TotalSize
@@ -1231,7 +1231,7 @@ Function Sync-Ets2ModRepo {
             Return $False
         }
         If ($Size -And $File.Length -ne $Size) {
-            Write-Log INFO "Test FAILED : FileSize Mismatch for File '$($File.Name)'`nExpected: $Size, Actual:   $($File.Length)."
+            Write-Log INFO "Test FAILED : FileSize Mismatch for File '$($File.Name)' - Expected: $Size, Actual: $($File.Length)."
             Return $False
         }
 
@@ -1241,7 +1241,7 @@ Function Sync-Ets2ModRepo {
 
             [String]$ComputedHash = [BitConverter]::ToString($Global:CryptoProvider.ComputeHash($Stream)) -Replace '-', ''
             If ($ComputedHash -ne $Hash) {
-                Write-Log INFO "Test FAILED : Computed FileHash Mismatch for File '$($File.Name)'`nExpected: $Hash`nActual:   $ComputedHash"
+                Write-Log INFO "Test FAILED : Computed FileHash Mismatch for File '$($File.Name)' - Expected: '$Hash', Actual: '$ComputedHash'"
                 Return $False
             }
             Else {
@@ -1250,7 +1250,7 @@ Function Sync-Ets2ModRepo {
             }
         }
         Catch   {
-            Write-Log ERROR "Test FAILED : Failed to compute FileHash for File '$($File.Name)':`n$($_.Exception.Message)"
+            Write-Log ERROR "Test FAILED : Failed to compute FileHash for File '$($File.Name)':` $($_.Exception.Message)"
             Return $False
         }
         Finally {$Stream.Dispose()}
@@ -3959,7 +3959,7 @@ Function Sync-Ets2ModRepo {
         Title       = ($Null, '[Experimental] ')[$Global:IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
         Version     = "Version $Global:ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $Global:Revision)")[$Global:IsExperimental]
-        VersionDate = '2026.01.12'
+        VersionDate = '2026.01.13'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
