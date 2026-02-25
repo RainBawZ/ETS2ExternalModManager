@@ -9,7 +9,7 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=221;
+#NUM_experimental=242;
 #STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
@@ -39,7 +39,9 @@
 
 #>
 
-# TODO: Implement ANSI text formatting                                 ### In progress - Ansi sybsystem implemented, gradually replacing calls to Write-HostX, Write-HostFancy, etc.
+#Requires -Version 7
+
+# TODO: Implement ANSI text formatting                                 ### In progress - ANSI subsystem implemented, gradually replacing calls to Write-HostX, Write-HostFancy, etc.
 # TODO: Add cross-platform (Windows/Linux) compatibility               ### Planning phase. Separate script?
 # TODO: Add core mod management (ReShade, Snowymoon - DLL/"hook" mods) ### Is it really needed?
 # TODO: Implement Test-GameConfiguration                               ### In progress: Get-GameConfig, Set-GameConfig and New-GameConfigValues implemented thus far
@@ -103,11 +105,14 @@ If (!$PSBoundParameters.ContainsKey('InputParam')) {
                     Try {[Console]::CursorVisible = $True} Catch {}
                     Write-Host -NoNewline -ForegroundColor Red 'Failed to auto-detect sim name. '
                     Write-Host -NoNewline 'Select manually [0: ETS2 | 1: ATS | ESC: Exit]'
-                    $Host.UI.RawUI.FlushInputBuffer()
+                    
+                    #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
+                    #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
+                    [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
 
                     Do {
                         If ($Null -ne $T__In) {[Console]::Beep(700, 250)}
-                        [Byte]$T__In = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
+                        [Byte]$T__In = [Int][Console]::ReadKey($True).Key
                         If ($T__In -eq 27) {Exit}
                     } Until ($T__In -In [Byte[]][Char[]]'01')
 
@@ -169,12 +174,14 @@ Function Sync-Ets2ModRepo {
             [Parameter(Mandatory, Position = 2)][Double]$Max
         )
 
-        # TODO: Swap upper and lower bounds if Min > Max?
-        If ($Max - $Min -lt 0) {
-            Write-Log ERROR "Invalid range: Maximum value ($Max) cannot be less than the Minimum value ($Min)."
-            Throw 'Invalid range'
-        }
-        If ($Global:ClampAvailable) {Return [Math]::Clamp($Value, $Min, $Max)} Else {Return ($Value, $Min, $Max)[$Value -lt $Min + ($Value -gt $Max * 2)]}
+        # Swap Min and Max if they are in the wrong order (Nin greater than Max)
+        If ($Min -gt $Max) {$Min, $Max = $Max, $Min}
+
+        If ($Global:ClampAvailable) {Return [Math]::Clamp($Value, $Min, $Max)}
+        Else                        {Return [Math]::Min([Math]::Max($Value, $Min), $Max)}
+
+        Write-Log ERROR "Invalid range: Maximum value ($Max) cannot be less than the Minimum value ($Min)."
+        Throw 'Invalid range'
     }
 
     Function Test-AnsiSupport {
@@ -452,7 +459,9 @@ Function Sync-Ets2ModRepo {
 
         Param ([Parameter(Position = 0)][String]$Prompt)
 
-        $Host.UI.RawUI.FlushInputBuffer()
+        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
+        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
         Write-Log INFO 'Flushed input buffer.'
 
         [Console]::CursorVisible = $True
@@ -483,7 +492,6 @@ Function Sync-Ets2ModRepo {
     Function Get-FileContent {
         [CmdletBinding(DefaultParameterSetName = 'Path')]
         [OutputType([String[]], [String], [Byte[]])]
-
         Param (
             [Parameter(Mandatory, ParameterSetName = 'Bytes')][Collections.Generic.List[Byte]]$FromBytes,
             [Parameter(Mandatory, Position = 0, ParameterSetName = 'Path')][IO.FileInfo]$Path,
@@ -491,8 +499,7 @@ Function Sync-Ets2ModRepo {
             [Parameter(ParameterSetName = 'Path')][UInt64]$Count = 0,
             [Parameter(ParameterSetName = 'Path')][Switch]$UseGc,
             [Parameter(ParameterSetName = 'Path')][Text.Encoding]$Encoding,
-            [ValidateSet('CRLF', 'Windows', 'LF', 'Unix', 'CR', 'Mac', 'Any', '*')][String]$Eol = 'LF',
-            [Switch]$Raw, [Switch]$AsByteArray, [Switch]$NoLog
+            [Switch]$Raw, [Switch]$AsByteArray, [Switch]$NoLog, [Switch]$PreserveLineEndings
         )
 
         If (!$NoLog.IsPresent) {
@@ -502,13 +509,8 @@ Function Sync-Ets2ModRepo {
             }
         }
 
-        [Hashtable]$EolMap = @{
-            CRLF    = "`r`n"; LF   = "`n"; CR  = "`r"
-            Windows = "`r`n"; Unix = "`n"; Mac = "`r"
-        }
-
         If ($Raw.IsPresent -And $AsByteArray.IsPresent -And !$NoLog.IsPresent) {Write-Log WARN 'Both -Raw and -AsByteArray switches are present. -Raw will be ignored.'}
-        [Collections.Generic.List[Byte]]$Bytes = Switch ($PSCmdlet.ParameterSetName) {
+        [Byte[]]$Bytes = Switch ($PSCmdlet.ParameterSetName) {
             'Path' {
                 If (!$Path.Exists) {If (!$NoLog.IsPresent) {Write-Log WARN "File '$($Path.Name)' not found. Returning null."} Return}
                 [Collections.Generic.List[Byte]]$FileBytes = [Collections.Generic.List[Byte]]::New($Path.Length)
@@ -526,7 +528,7 @@ Function Sync-Ets2ModRepo {
                     If ($Offset -le 3) {
                         If (!$NoLog.IsPresent -And $Offset -ne 0) {Write-Log INFO "Offset is within in the BOM range. Overriding Offset and Count values. (Offset: $Offset > 0; Count: $Count > $($Count + $Offset))"}
                         $Count += $Offset
-                        $Offset  = 0
+                        $Offset = 0
                     }
                     # TODO: Refactor this - Lots of unnecessary code since dropping FileStream in favor of ReadAllBytes
                     If (!$NoLog.IsPresent) {Write-Log INFO "Reading '$($Path.Length)' bytes from '$($Path.Name)' ReadAllBytes."}
@@ -541,7 +543,7 @@ Function Sync-Ets2ModRepo {
                     Else {[Byte[]]$Buffer = $FileBytes}
                 }
                 Catch {
-                    [String]$Source = "Gc Raw ByteStream '$($Path.Name)'"
+                    [String]$Source = "Gc -AsByteStream '$($Path.Name)'"
                     If ($_.Exception.Message -ne 'UseGc') {
                         If (!$NoLog.IsPresent) {
                             Write-Log ERROR "Failed to read '$($Path.Name)' bytes: $($_.Exception.Message)"
@@ -552,7 +554,7 @@ Function Sync-Ets2ModRepo {
                     Try {
                         If ($PSVersionTable.PSVersion.Major -lt 7) {
                             If (!$NoLog.IsPresent) {Write-Log ERROR "Failed to read '$($Path.Name)'. PowerShell $($PSVersionTable.PSVersion) does not support Get-Content ByteStream."}
-                            Throw 'Get-Content ByteStream not supported.'
+                            Throw "'Get-Content -AsByteStream' not supported."
                         }
 
                         $FileBytes = Get-Content $Path -AsByteStream -Raw
@@ -600,53 +602,42 @@ Function Sync-Ets2ModRepo {
         [String]$Content = $Encoding.GetString($Bytes)
         If (!$NoLog.IsPresent) {Write-Log INFO "Decoded byte array to '$($Encoding.EncodingName)' string (Code Page: $($Encoding.CodePage))."}
 
-        If ($EolMap.ContainsKey($Eol)) {
-            [String]$PreEolConversion = $Content
-            $Content = [Regex]::Replace($Content, '\r\n|\r|\n', $EolMap[$Eol])
-            If ($PreEolConversion -cne $Content -And !$NoLog.IsPresent) {Write-Log INFO "Converted line endings to $Eol."}
+        If (!$PreserveLineEndings.IsPresent -And !$AsByteArray.IsPresent -And !$Raw.IsPresent) {
+            #FIXME: ReplaceLineEndings not working as expected - Forcing regex replacement for now
+            #$Content = $Content.ReplaceLineEndings([Char]10)
+            $Content = [Regex]::Replace($Content, $Global:RxLineEndings, "`n")
+            If (!$NoLog.IsPresent) {Write-Log INFO "Normalized line endings to '\n' (LF / Line Feed)."}
         }
+        ElseIf (!$PreserveLineEndings.IsPresent -And !$NoLog.IsPresent) {Write-Log INFO 'Line endings not normalized due to Raw/AsByteArray output mode.'}
+        ElseIf (!$NoLog.IsPresent) {Write-Log INFO 'PreserveLineEndings switch present. Preserved line endings.'}
 
         If (!$NoLog.IsPresent)      {Write-Log INFO "$($Bytes.Count) bytes read from '$Source'."}
 
         If ($AsByteArray.IsPresent) {Return [Byte[]]$Encoding.GetBytes($Content)}
         If ($Raw.IsPresent)         {Return [String]$Content}
-        Else                        {Return [String[]]($Content -Split "\r\n|\n|\r")}
+        #Else                        {Return [String[]]($Content.ReplaceLineEndings([Char]10) -Split '\n')}
+        Else                        {Return [String[]]([Regex]::Replace($Content, $Global:RxLineEndings, "`n") -Split '\n')}
     }
 
     Function Set-Utf8Content {
         [CmdletBinding()]
         [OutputType([Void])]
-
         Param (
             [Parameter(Mandatory, Position = 0)][IO.FileInfo]$Path,
             [Parameter(Position = 1)][Collections.Generic.List[String]]$String,
-            [ValidateSet(
-                'CRLF',    'LF',   'CR',
-                'Windows', 'Unix', 'Mac',
-                '\r\n',    '\n',   '\r',
-                "`r`n",    "`n",   "`r"
-            )][String]$Eol = 'LF',
-            [Switch]$Append,
-            [Switch]$NoNewline,
-            [Switch]$PassThru,
-            [Switch]$NoLog
+            [Switch]$Append, [Switch]$NoNewline, [Switch]$PassThru, [Switch]$NoLog
         )
 
         [Text.UTF8Encoding]$Utf8 = [Text.UTF8Encoding]::New($False)
 
         If (!$NoLog.IsPresent) {Write-Log INFO "Received data write request of approx. $($Utf8.GetBytes(($String -Join '')).Count) bytes for '$Path'."}
-
-        [Hashtable]$EolMap = @{
-            CRLF    = "`r`n"; LF   = "`n"; CR   = "`r"
-            Windows = "`r`n"; Unix = "`n"; Mac  = "`r"
-            '\r\n'  = "`r`n"; '\n' = "`n"; '\r' = "`r"
-            "`r`n"  = "`r`n"; "`n" = "`n"; "`r" = "`r"
-        }
         
-        [String]$JoinedString = $String -Join $EolMap[$Eol]
-        If (!$NoNewline.IsPresent) {$JoinedString += $EolMap[$Eol]}
+        [String]$JoinedString = $String -Join "`n"
+        If (!$NoNewline.IsPresent) {$JoinedString += "`n"}
         
-        [Byte[]]$Bytes = $Utf8.GetBytes($JoinedString)
+        #FIXME: ReplaceLineEndings not working as expected - Forcing regex replacement for now
+        #[Byte[]]$Bytes = $Utf8.GetBytes($JoinedString.ReplaceLineEndings([Char]10))
+        [Byte[]]$Bytes = $Utf8.GetBytes([Regex]::Replace($JoinedString, $Global:RxLineEndings, "`n"))
         
         If ($Append.IsPresent) {[IO.File]::AppendAllText($Path, $Utf8.GetString($Bytes), $Utf8)}
         Else                   {[IO.File]::WriteAllBytes($Path, $Bytes)}
@@ -658,7 +649,6 @@ Function Sync-Ets2ModRepo {
     Function Format-AndExportErrorData {
         [CmdletBinding()]
         [OutputType([String])]
-
         Param ([Parameter(Mandatory)][Management.Automation.ErrorRecord]$Exception)
 
         [String]$Timestamp = [DateTime]::Now.ToString('yyyy.MM.dd HH:mm:ss.fff')
@@ -678,7 +668,6 @@ Function Sync-Ets2ModRepo {
     Function Get-FileEncoding { # FIXME: Slow asf
         [CmdletBinding()]
         [OutputType([PSCustomObject], [Void])]
-
         Param (
             [Parameter(Mandatory, Position = 0, ParameterSetName = 'Path')]
             [ValidateScript({$_.Exists})]
@@ -982,7 +971,6 @@ Function Sync-Ets2ModRepo {
     Function Write-Log {
         [CmdletBinding()]
         [OutputType([Void])]
-
         Param (
             [Parameter(Mandatory, Position = 0)][String]$Type,
             [Parameter(Position = 1)][String]$Message = '',
@@ -1011,7 +999,6 @@ Function Sync-Ets2ModRepo {
     Function Measure-TransferRate {
         [CmdletBinding()]
         [OutputType([String])]
-
         Param (
             [Parameter(Mandatory, Position = 0)][Double]$Duration,
             [Parameter(Mandatory, Position = 1)][UInt32]$Bytes,
@@ -1037,7 +1024,6 @@ Function Sync-Ets2ModRepo {
     Function Get-ModRepoFile {
         [CmdletBinding(DefaultParameterSetName = 'NoIWR')]
         [OutputType([Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject], [Object[]])]
-
         Param (
             [Parameter(Mandatory, Position = 0)][String]$File,
             [Parameter(ParameterSetName = 'NoIWR', Position = 1)][Byte]$X,
@@ -1140,7 +1126,7 @@ Function Sync-Ets2ModRepo {
             }
 
             [Console]::SetCursorPosition($X, [Console]::CursorTop)
-            Write-Host -NoNewline -ForegroundColor Green ("║ $State " + "$ConvertedBytes".PadLeft(5) + "/$ConvertedDownload ($TransferRate)").PadRight(48)
+            Write-Host -NoNewline -ForegroundColor Green ("$State " + "$ConvertedBytes".PadLeft(5) + "/$ConvertedDownload ($TransferRate)").PadRight(48)
             Write-Host -NoNewline ' ║'
         }
 
@@ -1184,7 +1170,6 @@ Function Sync-Ets2ModRepo {
     Function Test-ModActive {
         [CmdletBinding()]
         [OutputType([Bool])]
-
         Param ([Parameter(Mandatory)][String]$Mod)
 
         Write-Log INFO 'Received mod usage status request.'
@@ -1206,7 +1191,6 @@ Function Sync-Ets2ModRepo {
     Function Test-FreeDiskSpace {
         [CmdletBinding()]
         [OutputType([Bool])]
-
         Param (
             [Parameter(Mandatory, Position = 0)]
             [UInt64]$Size,
@@ -1243,7 +1227,6 @@ Function Sync-Ets2ModRepo {
     Function Get-StringHash {
         [CmdletBinding(DefaultParameterSetName = 'String')]
         [OutputType([String])]
-
         Param (
             [Parameter(Mandatory, ParameterSetName = 'String', Position = 0)]
             [String[]]$String,
@@ -1273,7 +1256,6 @@ Function Sync-Ets2ModRepo {
     Function Test-FileHash {
         [CmdletBinding()]
         [OutputType([Bool])]
-
         Param (
             [Parameter(Position = 0)][IO.FileInfo]$File,
             [Parameter(Mandatory, Position = 1)][String]$Hash,
@@ -1314,7 +1296,6 @@ Function Sync-Ets2ModRepo {
     Function Test-ArrayNullOrEmpty {
         [CmdletBinding()]
         [OutputType([Bool])]
-
         Param ([AllowEmptyCollection()][Object[]]$Array)
 
         If ($Null -eq $Array) {Return $True}
@@ -1325,7 +1306,6 @@ Function Sync-Ets2ModRepo {
     Function Get-GameConfig {
         [CmdletBinding(DefaultParameterSetName = 'Path')]
         [OutputType([Hashtable])]
-
         Param (
             [Parameter(ParameterSetName = 'Path')][IO.FileInfo]$ConfigPath = $Global:GameConfigPath,
             [Parameter(Mandatory, ParameterSetName = 'String')][String]$RawString
@@ -1353,7 +1333,6 @@ Function Sync-Ets2ModRepo {
     Function New-GameConfigValues {
         [CmdletBinding()]
         [OutputType([Hashtable])]
-
         Param (
             [Parameter(Mandatory)][Hashtable]$ConfigData,
             [IO.FileInfo]$ConfigPath = $Global:GameConfigPath,
@@ -1414,7 +1393,6 @@ Function Sync-Ets2ModRepo {
     Function Set-GameConfig {
         [CmdletBinding()]
         [OutputType([Void])]
-        
         Param (
             [Parameter(Mandatory, Position = 0)][Hashtable]$Settings,
             [IO.FileInfo]$ConfigPath = $Global:GameConfigPath
@@ -1436,7 +1414,6 @@ Function Sync-Ets2ModRepo {
     Function Wait-WriteAndExit {
         [CmdletBinding()]
         [OutputType([String])]
-
         Param ([String]$InputObject, [Switch]$Restart)
 
         Write-Log INFO 'Received wait and exit request.'
@@ -1464,7 +1441,6 @@ Function Sync-Ets2ModRepo {
     Function Read-KeyPress {
         [CmdletBinding(DefaultParameterSetName = 'Default')]
         [OutputType([Byte])]
-
         Param (
             [Parameter(Position = 0)][String]$Prompt,
             [Parameter()][Alias('Fg')][ConsoleColor]$ForegroundColor = [Console]::ForegroundColor,
@@ -1480,14 +1456,22 @@ Function Sync-Ets2ModRepo {
         )
 
         Write-Log INFO 'Received key press input request.'
+
+        [Bool]$HasPrompt = $PSBoundParameters.ContainsKey('Prompt')
+        [Bool]$HasTimer  = $PSBoundParameters.ContainsKey('TimerAt')
         
-        If ($PSBoundParameters.ContainsKey('Prompt')) {
-            If ($PSVersionTable.PSVersion.Major -lt 7) {$Prompt = [Regex]::Replace($Prompt, '\r\n|\r|\n', "`n")}
-            Else                                       {$Prompt = $Prompt.ReplaceLineEndings("`n")}
+        If ($HasPrompt) {
+            [Regex]$RxTimerAt = [Regex]::New([Regex]::Escape($TimerAt), 8) # 8 > [Text.RegularExpressions.RegexOptions]::Compiled
+
+            #FIXME: ReplaceLineEndings([Char]10) incorrectly replaces line endings - forcing regex replacement until PS7 ReplaceLineEndings method works.
+            #If ($PSVersionTable.PSVersion.Major -lt 7) {$Prompt = [Regex]::Replace($Prompt, $Global:RxLineEndings, "`n")}
+            #Else                                       {$Prompt = $Prompt.ReplaceLineEndings([Char]10)}
+            $Prompt = [Regex]::Replace($Prompt, $Global:RxLineEndings, "`n")
+
             [Bool]$PromptIsMultiLine = ($Prompt -Split "`n").Count -gt 1
-            If ($PSBoundParameters.ContainsKey('TimerAt')) {
+            If ($HasTimer) {
                 [String]$InitPrompt = $Prompt
-                $Prompt             = [Regex]::Replace($InitPrompt, [Regex]::Escape($TimerAt), $Timeout)
+                $Prompt             = [Regex]::Replace($InitPrompt, $RxTimerAt, $Timeout)
                 If ($PromptIsMultiLine) {[UInt16[]]$Len = $Prompt -Split "`n" | ForEach-Object {$_.Length}}
                 Else                    {[UInt16]$Len   = $Prompt.Length}
             }
@@ -1507,7 +1491,9 @@ Function Sync-Ets2ModRepo {
             Write-Host @PromptSplat
         }
 
-        $Host.UI.RawUI.FlushInputBuffer()
+        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
+        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
         Write-Log INFO 'Flushed input buffer.'
 
         If ($PSCmdlet.ParameterSetName -eq 'Timeout') {
@@ -1518,10 +1504,10 @@ Function Sync-Ets2ModRepo {
             [DateTime]$Start  = [DateTime]::Now
 
             While ($Duration -le $Timeout) {
-                If ($PSBoundParameters.ContainsKey('Prompt') -And $PSBoundParameters.ContainsKey('TimerAt')) {
+                If ($HasPrompt -And $HasTimer) {
                     [UInt32]$Diff = Limit-Range ([Math]::Ceiling($Timeout - $Duration)) 0 $Timeout
                     If ($Diff -ne $SecsLeft) {
-                        $Prompt                = [Regex]::Replace($InitPrompt, [Regex]::Escape($TimerAt), "$Diff")
+                        $Prompt                = [Regex]::Replace($InitPrompt, $RxTimerAt, "$Diff")
                         $PromptSplat['Object'] = $Prompt
                         If ($PromptIsMultiLine) {
                             [UInt16[]]$nLen = $Prompt -Split "`n" | ForEach-Object {$_.Length}
@@ -1545,7 +1531,7 @@ Function Sync-Ets2ModRepo {
                         $SecsLeft = $Diff
                     }
                 }
-                If ($Host.UI.RawUI.KeyAvailable) {[Byte]$KeyCode = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode; Break}
+                If ([Console]::KeyAvailable) {[Byte]$KeyCode = [Int][Console]::ReadKey($True).Key; Break}
                 Start-Sleep -Milliseconds $RefreshRate
                 $Duration = ([DateTime]::Now - $Start).TotalSeconds
             }
@@ -1553,11 +1539,11 @@ Function Sync-Ets2ModRepo {
         }
         Else {
             Write-Log INFO 'Awaiting key press...'
-            [Byte]$KeyPress = $Host.UI.RawUI.ReadKey('NoEcho, IncludeKeyDown').VirtualKeyCode
+            [Byte]$KeyPress = [Int][Console]::ReadKey($True).Key
             Write-Log INFO "Keypress received: $KeyPress"
         }
 
-        If ($Clear.IsPresent -And $PSBoundParameters.ContainsKey('Prompt')) {
+        If ($Clear.IsPresent -And $HasPrompt) {
             [UInt16[]]$nLen = $PromptSplat.Object -Split "`n" | ForEach-Object {$_.Length}
             If ("$nLen" -ne "$Len") {
                 [String[]]$Clear      = For ($i = 0; $i -lt $Len.Count; $i++) {$Len[$i] = [Math]::Max($Len[$i], $nLen[$i]); ' ' * $Len[$i]}
@@ -1568,7 +1554,9 @@ Function Sync-Ets2ModRepo {
             [Console]::SetCursorPosition($InitPos.X, $InitPos.Y)
         }
         
-        $Host.UI.RawUI.FlushInputBuffer()
+        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
+        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
         Write-Log INFO 'Flushed input buffer.'
 
         Return $KeyPress
@@ -1577,7 +1565,6 @@ Function Sync-Ets2ModRepo {
     Function Set-ForegroundWindow {
         [CmdletBinding(DefaultParameterSetName = 'PID')]
         [OutputType([Void])]
-
         Param (
             [Parameter(ParameterSetName = 'Self', Mandatory)]
             [Switch]$Self,
@@ -1657,7 +1644,6 @@ Function Sync-Ets2ModRepo {
     Function ConvertFrom-ActiveModEntry {
         [CmdletBinding()]
         [OutputType([Hashtable])]
-
         Param (
             [Parameter(Position = 0)][String]$Locator,
             [Parameter(Position = 1)][String]$Name
@@ -1687,7 +1673,6 @@ Function Sync-Ets2ModRepo {
     Function Convert-ProfileFolderName {
         [CmdletBinding()]
         [OutputType([String])]
-
         Param ([String]$Directory = $Global:ActiveProfile)
 
         Write-Log INFO 'Received profile folder conversion request.'
@@ -1706,7 +1691,6 @@ Function Sync-Ets2ModRepo {
     Function ConvertTo-PlainTextProfileUnit {
         [CmdletBinding()]
         [OutputType([Void])]
-
         Param (
             [IO.FileInfo]$File    = $Global:ProfileUnit,
             [IO.FileInfo]$OutFile = $Global:TempProfileUnit,
@@ -1732,7 +1716,6 @@ Function Sync-Ets2ModRepo {
     Function Test-WorkshopModInstalled {
         [CmdletBinding()]
         [OutputType([Bool])]
-
         Param ([Parameter(Mandatory)][IO.DirectoryInfo]$ModFolder)
 
         Write-Log INFO 'Received Workshop mod install status request.'
@@ -1814,9 +1797,9 @@ Function Sync-Ets2ModRepo {
                     $Parent | Add-Member -MemberType NoteProperty -Name $Key -Value $Current -Force
                 }
                 Else {
-                    # Anonymous block: nothing to attach by name.
+                    # Anonymous block - Nothing to attach by name.
                     Write-Log DEBUG "Encountered anonymous block with no key."
-                    # If you ever find you need these, we can store them in a list property instead.
+                    # Store in a list property instead of if they're needed at all.
                 }
 
                 $Current       = $Parent
@@ -1845,72 +1828,157 @@ Function Sync-Ets2ModRepo {
         Return $Root
     }
 
-    <# TODO: Deprecated code - Remove once confirmed working
-    Function Import-Vdf {
-        [CmdletBinding()]
-        [OutputType([PSCustomObject])]
-
-        Param (
+    Function Convert-SteamId {
+        [CmdletBinding(DefaultParameterSetName = 'Auto')]
+        [OutputType([UInt32], [UInt64], [String])]
+        Param(
+            # Accepts:
+            # - SteamID64: 7656119...
+            # - AccountID/SteamID32: 0..4294967295
+            # - SteamID2: STEAM_0:1:12345
+            # - SteamID3: [U:1:12345]
             [Parameter(Mandatory, Position = 0)]
-            [ValidateScript({$_.Exists})]
-            [IO.FileInfo]$Path
+            [Alias('SteamId','Input','Id')]
+            [Object]$SteamIdInput,
+
+            [Parameter(Mandatory, Position = 1)]
+            [ValidateSet('SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2', 'ID64', 'ID', 'ID32', 'ID3', 'ID2')]
+            [Alias('To')]
+            [String]$Type,
+
+            # Optional hint. If omitted, we auto-detect.
+            [Parameter(Position = 2, ParameterSetName = 'Explicit')]
+            [ValidateSet('Auto', 'SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2', 'ID64', 'ID', 'ID32', 'ID3', 'ID2')]
+            [String]$From = 'Auto'
         )
 
-        Write-Log INFO 'Received VDF import conversion request.'
+        Write-Log INFO "Received SteamID conversion request for '$SteamIdInput' to ID type '$Type'. Type hint: '$From'."
 
-        [String]$RawVdf = Get-FileContent -Path $Path -Raw
+        [UInt64]$SteamId64Base = 76561197960265728                   # SteamID64 base value (not an actual SteamID64)
+        [String]$IdString      = ($SteamIdInput -As [String]).Trim() # Input as string
 
-        $RawVdf = $RawVdf -Replace '\{', "`n{`n" -Replace '\}', "`n}`n"
-        #[Text.RegularExpressions.MatchCollection]$TokenMatches = [Regex]::Matches($RawVdf, '"([^"\\]*(?:\\.[^"\\]*)*)"|\{|\}')
+        [String]$NormType = Switch ($Type) {
+            'ID64'  {'SteamID64'; Break}
+            'ID32'  {'AccountID'; Break}
+            'ID'    {'AccountID'; Break}
+            'ID3'   {'SteamID3'; Break}
+            'ID2'   {'SteamID2'; Break}
+            Default {$Type; Break}
+        }
+        If ($NormType -ne $Type) {Write-Log INFO "Normalized target ID type: '$Type' > '$NormType'."; $Type = $NormType}
 
-        [String[]]$Lines = $RawVdf -Split "(`r`n|`n|`r)" | Where-Object {$_.Trim().Length -gt 0}
+        [String]$NormFrom = Switch ($From) {
+            'ID64'  {'SteamID64'; Break}
+            'ID32'  {'AccountID'; Break}
+            'ID'    {'AccountID'; Break}
+            'ID3'   {'SteamID3'; Break}
+            'ID2'   {'SteamID2'; Break}
+            Default {$From; Break}
+        }
+        If ($NormFrom -ne $From) {Write-Log INFO "Normalized input ID type hint: '$From' > '$NormFrom'."; $From = $NormFrom}
 
-        [Collections.Generic.List[String]]$KeyStack = [Collections.Generic.List[String]]::New()
-        [Collections.Generic.List[Object]]$ObjStack = [Collections.Generic.List[Object]]::New()
+        # ====== Normalize input ID type to AccountID ======
+        If ($From -eq 'Auto') {
+            If ($IdString -Match '^\d+$') {
+                # Numeric: could be SteamID64 or AccountID/SteamID32
+                # Heuristic: SteamID64 is >= base; AccountID fits in UInt32.
+                Try   {[UInt64]$IdNumeric = $IdString}
+                Catch {Throw "Numeric SteamID input '$IdString' is not a valid unsigned integer."}
 
-        [PSCustomObject]$RootObject    = [PSCustomObject]@{}
-        [PSCustomObject]$CurrentObject = $RootObject
-
-        ForEach ($Line in $Lines) {
-
-            [String]$Trimmed = $Line.Trim()
-
-            If ($Trimmed -eq '{') {
-                $ObjStack.Add($CurrentObject)
-                $CurrentObject = [PSCustomObject]@{}
-                Continue
+                If     ($IdNumeric -ge $SteamId64Base)     {$From = 'SteamID64'}
+                ElseIf ($IdNumeric -le [UInt32]::MaxValue) {$From = 'AccountID'}
+                Else                                       {Throw "Numeric SteamID input '$IdString' is neither a valid SteamID64 nor a UInt32 AccountID/SteamID32."}
             }
+            ElseIf ($IdString -Match '^STEAM_\d+:[01]:\d+$')            {$From = 'SteamID2'}
+            ElseIf ($IdString -Match '^\[[A-Za-z]:\d+:\d+(?::\d+)?\]$') {$From = 'SteamID3'}
+            Else                                                        {Throw "Unable to auto-detect SteamID format from '$IdString'."}
 
-            If ($Trimmed -eq '}') {
-                If ($KeyStack.Count -lt 1) {write-host 'VDF Import Error: Key stack underflow.'}
-                If ($ObjStack.Count -lt 1) {write-host 'VDF Import Error: Object stack underflow.'}
+            Write-Log INFO "Auto-detected input ID type: '$From'."
+        }
 
+        Try {
+            Switch ($From) {
+                'SteamID64' {
+                    Try   {[UInt64]$Id64 = $IdString}
+                    Catch {Throw "{0} '{1}' is not a valid UInt64."}
 
-                [String]$Key = $KeyStack[-1]
-                $KeyStack.RemoveAt($KeyStack.Count - 1)
+                    If ($Id64 -lt $SteamId64Base) {Throw "Provided {0} '{1}' is less than the minimum valid {0} value."}
 
-                $ParentObject = $ObjStack[-1]
-                $ObjStack.RemoveAt($ObjStack.Count - 1)
+                    [UInt64]$Acc64 = $Id64 - $SteamId64Base
+                    If ($Acc64 -gt [UInt32]::MaxValue) {Throw "Derived AccountID '$Acc64' exceeds UInt32 max value and cannot be a standard individual {0}."}
 
-                $ParentObject | Add-Member -MemberType NoteProperty -Name $Key -Value $CurrentObject -Force
-                $CurrentObject = $ParentObject
-                Continue
-            }
+                    [UInt32]$AccountId = $Acc64
+                    Break
+                }
 
-            [Text.RegularExpressions.MatchCollection]$StrMatches = [Regex]::Matches($Trimmed, '"([^"]*)"')
-            If ($StrMatches.Count -eq 1) {
-                $KeyStack.Add($StrMatches[0].Groups[1].Value)
-            }
-            ElseIf ($StrMatches.Count -ge 2) {
-                $CurrentObject | Add-Member -MemberType NoteProperty -Name $StrMatches[0].Groups[1].Value -Value $StrMatches[1].Groups[1].Value -Force
+                'AccountID' {
+                    Try   {[UInt32]$IdNumeric = $IdString}
+                    Catch {Throw "{0} '{1}' is not a valid UInt32."}
+
+                    [UInt32]$AccountId = $IdNumeric
+                    Break
+                }
+
+                'SteamID2' {
+                    # STEAM_X:Y:Z  => AccountID = Z*2 + Y
+                    If ($IdString -NotMatch '^STEAM_(?<Universe>\d+):(?<Y>[01]):(?<Z>\d+)$') {Throw "{0} '{1}' is not in a recognized format (expected STEAM_X:Y:Z)."}
+
+                    [UInt32]$y = $Matches.Y
+
+                    # Z can be large, validate carefully
+                    Try   {[UInt64]$z = $Matches.Z}
+                    Catch {Throw "{0} '{1}' has an invalid Z component."}
+
+                    [UInt64]$Acc = ($z * 2) + $y
+                    If ($Acc -gt [UInt32]::MaxValue) {Throw "{0} '{1}' converts to AccountID '$Acc' which exceeds UInt32 max value."}
+
+                    [UInt32]$AccountId = $Acc
+                    Break
+                }
+
+                'SteamID3' {
+                    # Common individual form: [U:1:<accountid>]
+                    # Note: SteamID3 can represent non-user types. Only accepted U here.
+                    If ($IdString -NotMatch '^\[(?<Type>[A-Za-z]):(?<Universe>\d+):(?<Id>\d+)(?::(?<Instance>\d+))?\]$') {Throw "{0} '{1}' is not in a recognized format."}
+                    [String]$IdType = $Matches.Type
+                    If ($IdType -ne 'U') {Throw "{0} '{1}' is type '$IdType'. This function currently supports only individual user IDs (type 'U')."}
+
+                    Try   {[UInt64]$Id = $Matches.Id }
+                    Catch {Throw "{0} '{1}' has an invalid account/id component."}
+
+                    If ($Id -gt [UInt32]::MaxValue) {Throw "{0} '{1}' converts to AccountID '$Id' which exceeds UInt32 max value."}
+
+                    [UInt32]$AccountId = $Id
+                    Break
+                }
+
+                Default {Throw "Unknown input SteamID type '{0}'."}
             }
         }
-        Return $RootObject
-    }#>
+        Catch {
+            Write-Log ERROR ($_.Exception.Message -f $From, $IdString)
+            Throw $_
+        }
+        # =======
 
-    Function Convert-SteamId64 {
+        # Derive other representations from AccountID
+        [UInt64]$SteamId64 = $SteamId64Base + [UInt64]$AccountId
+        [Byte]$Y           = $AccountId % 2
+        [UInt32]$Z         = ($AccountId - $Y) / 2
+
+        Switch ($Type) {
+            'SteamID64' {Return $SteamId64 }
+            'AccountID' {Return $AccountId }
+            'SteamID32' {Return $AccountId }                 # SteamID32 == AccountID
+            'SteamID3'  {Return "[U:1:$AccountId]" }         # Individual user
+            'SteamID2'  {Return "STEAM_0:$($Y):$Z" }         # Universe 0 is the usual display
+            Default     {Throw "Unknown output SteamID type '$Type'." }
+        }
+    }
+
+    <#Function Convert-SteamId64 {
         [CmdletBinding()]
-
+        [OutputType([UInt32], [UInt64], [String])]
         Param (
             [Parameter(Mandatory, Position = 0)]
             [Alias('SteamId')]
@@ -1953,12 +2021,11 @@ Function Sync-Ets2ModRepo {
             'SteamID2'  {Return "STEAM_0:$($Y):$Z"}
             Default     {Write-Log ERROR "Unknown SteamID type '$Type'.";Throw "Unknown SteamID type '$Type'."}
         }
-    }
+    }#>
 
     Function Get-SteamUserId {
         [CmdletBinding()]
         [OutputType([UInt64])]
-
         Param (
             [IO.DirectoryInfo]$SteamDir = $Global:SteamRoot,
             [Switch]$IncludeName, [Switch]$IncludeAlias
@@ -2006,7 +2073,7 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO "Received Steam launch options get request for AppID $AppId."
         
-        [UInt32]$SteamId32           = Convert-SteamId64 $UserSteamId -To SteamID32
+        [UInt32]$SteamId32           = Convert-SteamId $UserSteamId SteamID32
         [IO.FileInfo]$LocalConfigVdf = "$SteamDir\userdata\$SteamId32\config\localconfig.vdf"
         [PSCustomObject]$VdfData     = Import-Vdf -Path $LocalConfigVdf
 
@@ -2032,25 +2099,6 @@ Function Sync-Ets2ModRepo {
 
         If ($Raw.IsPresent) {[String]$LaunchOptions   = $Config.LaunchOptions}
         Else                {[String[]]$LaunchOptions = $Config.LaunchOptions -Split ' (?=-)'}
-
-        <# TODO: Deprecated code - Remove once confirmed working
-        [Collections.Generic.List[String]]$VdfLines = Get-FileContent "$SteamDir\userdata\$SteamId32\config\localconfig.vdf"
-        [Bool]$SearchingAppId  = $False
-        [Int]$Stack            = 0
-        [Regex]$AppIdPattern   = '^"' + $AppId + '"$'
-        
-        ForEach ($Line in $VdfLines) {
-            [String]$Trimmed = $Line.Trim()
-            
-            If ([String]::IsNullOrWhiteSpace($Trimmed)) {Continue}
-            If ($Trimmed -Match $AppIdPattern)          {$SearchingAppId = $True; Continue}
-
-            If ($SearchingAppId) {
-                If ($Trimmed -eq '{')                                           {$Stack++}
-                If ($Trimmed -eq '}')                                           {$Stack--; If ($Stack -eq 0) {Break}}
-                If ($Trimmed -Match '^"LaunchOptions"[ \t]+"((?:[^"]|\\")*)"$') {Return $Matches[1]}
-            }
-        }#>
 
         Return $LaunchOptions
     }
@@ -2100,7 +2148,7 @@ Function Sync-Ets2ModRepo {
             $UserSteamId = Get-SteamUserId
         }
 
-        [UInt32]$SteamId32                 = Convert-SteamId64 $UserSteamId -To SteamID32
+        [UInt32]$SteamId32                 = Convert-SteamId $UserSteamId SteamID32
         [IO.DirectoryInfo]$RemoteDirectory = "$SteamDir\userdata\$SteamId32\$AppId\remote"
 
         If (!$RemoteDirectory.Parent.Exists) {
@@ -2133,12 +2181,6 @@ Function Sync-Ets2ModRepo {
             'Both'     {Write-Log INFO "Received $Global:GameNameShort ($Global:GameAppId) Game Root + Workshop Directory Lookup request."; Break}
             Default    {Throw [Management.Automation.ParameterBindingException]::New("Invalid parameter set name '$_'.")}
         }
-
-        <# TODO: Deprecated code - Remove once confirmed working
-        [Regex]$PathSearchPattern  = '(?i)(?<="path"\s+")[a-z]\:(?:\\\\.+)+(?=")'
-        [Regex]$PathReplacePattern = '\\\\'
-        [Regex]$AppIdSearchPattern = '(?<=")' + $Global:GameAppId + '(?="\s+"\d+")'
-        [Regex]$InstallDirPattern = '(?<="installdir"\s+")[^"]+(?=")'#>
         
         [IO.FileInfo]$LibVdf = "$Global:SteamRoot\SteamApps\libraryfolders.vdf"
 
@@ -2158,13 +2200,6 @@ Function Sync-Ets2ModRepo {
                 Break
             }
         }
-
-        <# TODO: Deprecated code - Remove once confirmed working
-        [String[]]$LibraryData       = Get-FileContent $LibVdf
-        [IO.DirectoryInfo]$SteamApps = ForEach ($Line in $LibraryData) {
-            If ($Line -Match $PathSearchPattern)  {[String]$Path = $Matches[0] -Replace $PathReplacePattern, '\'; Continue}
-            If ($Line -Match $AppIdSearchPattern) {"$Path\SteamApps"; Break}
-        }#>
 
         If (!$SteamApps.Exists) {
             Write-Log ERROR "Failed to locate $Global:GameNameShort SteamApps Directory in Steam Library VDF data. (Segment: '$Path'; Lookup result: '$SteamApps')"
@@ -2649,18 +2684,8 @@ Function Sync-Ets2ModRepo {
                 $Iteration++
             }
             Write-Ansi "`n * Use the <cyan>[UP]</cyan> and <cyan>[DOWN]</cyan> keys to select an $Global:GameNameShort profile.`n   Press <cyan>[ENTER]</cyan> to confirm your selection" -NoNewline
-            <#Write-Host -NoNewline -ForegroundColor Cyan '[UP]'
-            Write-Host -NoNewline ' and '
-            Write-Host -NoNewline -ForegroundColor Cyan '[DOWN]'
-            Write-Host -NoNewline " keys to select an $Global:GameNameShort profile.`n   Press "
-            Write-Host -NoNewline -ForegroundColor Cyan '[ENTER]'
-            Write-Host -NoNewline ' to confirm your selection'#>
-            If ($AllowEsc.IsPresent) {
-                Write-Ansi ", or <cyan>[ESC]</cyan> to cancel."
-                <#Write-Host -NoNewline ', or '
-                Write-Host -NoNewline -ForegroundColor Cyan '[ESC]'
-                Write-Host ' to cancel.'#>
-            }
+
+            If ($AllowEsc.IsPresent) {Write-Ansi ", or <cyan>[ESC]</cyan> to cancel."}
             Else {Write-Host '.'}
 
             [String]$SelectedProfile = $AllProfiles[$Selected]
@@ -2735,8 +2760,8 @@ Function Sync-Ets2ModRepo {
             Write-EmbeddedValue $TargetIndex $Directory
             Write-Log INFO "Active profile changed from '$Global:ActiveProfile' to '$Directory'. Executing script restart routine."
 
-            $GLOBAL:ScriptRestart = $True
-            [Void]$GLOBAL:ScriptRestart
+            $Global:ScriptRestart = $True
+            [Void]$Global:ScriptRestart
         }
     }
 
@@ -3173,7 +3198,6 @@ Function Sync-Ets2ModRepo {
         })
 
         While ($True) {
-
             Try {
                 Write-Log INFO 'Displaying Repository URL input form.'
                 [Windows.Forms.DialogResult]$DialogResult = $RepositoryUrlForm.ShowDialog($Owner)
@@ -3301,10 +3325,7 @@ Function Sync-Ets2ModRepo {
                 Write-Log INFO "Enumeration halted on $($Data.Count): Current='$Line'"
             }
             Catch   {Write-Log ERROR "Failed to read persistent storage: $($_.Exception.Message)"; Throw $_}
-            Finally {
-                If ($Null -ne $Reader) {$Reader.Dispose()}
-                Write-Log INFO 'Disposed StreamReader.'
-            }
+            Finally {If ($Null -ne $Reader) {$Reader.Dispose()} Write-Log INFO 'Disposed StreamReader.'}
         }
         Else {
             Try {
@@ -3461,7 +3482,7 @@ Function Sync-Ets2ModRepo {
             $Info     = $Info.Substring(1)
             $RawValue = $RawValue.Substring(0, $RawValue.Length - 1)
 
-            [String]$Format, [String]$Name   = $Info -Split '_', 2
+            [String]$Format, [String]$Name = $Info -Split '_', 2
             Switch ($Format) {
                 'NUM'   {[Int64]$Value  = $RawValue}
                 'DEC'   {[Double]$Value = $RawValue}
@@ -3883,9 +3904,10 @@ Function Sync-Ets2ModRepo {
             # Check header
             If ($Header -NotMatch $HeaderValidationExpr) {
                 [String]$FailureMessage = "$Name : Invalid header format '$Header'"
-                $Failures += $FailureMessage
+                $Failures              += $FailureMessage
 
                 Write-Log ERROR $FailureMessage
+
                 If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
                 If ($ContinueOnError.IsPresent) {$IsValid = $False} Else {Throw [ApplicationException]::New($FailureMessage)}
             }
@@ -3894,7 +3916,7 @@ Function Sync-Ets2ModRepo {
                 {[UInt16]::TryParse($_, [Ref]$Null)} {[UInt16]::Parse($_); Break}
                 Default {
                     [String]$FailureMessage = "$Name : Can't parse header mod count '$_' from '$Header'"
-                    $Failures += $FailureMessage
+                    $Failures              += $FailureMessage
 
                     Write-Log ERROR $FailureMessage
                     If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
@@ -3903,7 +3925,7 @@ Function Sync-Ets2ModRepo {
             }
             If ($Data.Count -ne $ExpectedCount) {
                 [String]$FailureMessage = "$Name : Invalid mod count. Expected '$ExpectedCount', got '$($Data.Count)'"
-                $Failures += $FailureMessage
+                $Failures              += $FailureMessage
 
                 Write-Log ERROR $FailureMessage
                 If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
@@ -3919,7 +3941,7 @@ Function Sync-Ets2ModRepo {
                     {[UInt16]::TryParse($_, [Ref]$Null)} {[UInt16]::Parse($_); Break}
                     Default {
                         [String]$FailureMessage = "$Name ($Line): Can't parse entry index '$_' from '$Entry'"
-                        $Failures += $FailureMessage
+                        $Failures              += $FailureMessage
 
                         Write-Log ERROR $FailureMessage
                         If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
@@ -3929,7 +3951,7 @@ Function Sync-Ets2ModRepo {
 
                 If ($EntryIndex -ne $Index) {
                     [String]$FailureMessage = "$Name ($Line): Expected index $Index but received $EntryIndex"
-                    $Failures += $FailureMessage
+                    $Failures              += $FailureMessage
 
                     Write-Log ERROR $FailureMessage
                     If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
@@ -3938,7 +3960,7 @@ Function Sync-Ets2ModRepo {
 
                 If ($Entry -NotMatch $FormatValidationExpr) {
                     [String]$FailureMessage = "$Name ($Line): Malformed entry '$Entry'"
-                    $Failures += $FailureMessage
+                    $Failures              += $FailureMessage
 
                     Write-Log ERROR $FailureMessage
                     If ($ShowInfo.IsPresent)        {Write-HostX @WhxSplat $FailureMessage}
@@ -3949,7 +3971,7 @@ Function Sync-Ets2ModRepo {
         Catch {
             If ($_.Exception -IsNot [ApplicationException]) {
                 [String]$FailureMessage = "$Name : " + $_.Exception.Message
-                $Failures += $FailureMessage
+                $Failures              += $FailureMessage
 
                 Write-Log ERROR $FailureMessage
                 If ($ShowInfo.IsPresent) {Write-HostX @WhxSplat $FailureMessage}
@@ -4140,7 +4162,7 @@ Function Sync-Ets2ModRepo {
             ForEach ($TypeDef in $TypeDefinitions) {
                 [Regex]::Matches($TypeDef, '(?<= )(class|enum) (\w+)(?= \{)').Value | ForEach-Object {
                     [String]$DefType, [String]$DefName = $_ -Split ' ', 2
-                    $TypeNames += [String]('TypeDef: ' + $Global:CultureTextInfo.ToTitleCase($DefType) + " $DefName")
+                    $TypeNames                        += [String]('TypeDef: ' + $Global:CultureTextInfo.ToTitleCase($DefType) + " $DefName")
                 }
             }
         }
@@ -4168,6 +4190,7 @@ Function Sync-Ets2ModRepo {
 
     [String]$T__SimDir              = ('Euro Truck Simulator 2', 'American Truck Simulator')[$T__Game -eq 'ATS']
     [IO.FileInfo]$Global:SessionLog = [IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), $T__SimDir, 'mod', "$Global:SessionId.log.txt")
+    [Regex]$Global:RxLineEndings    = [Regex]::New('\r\n|\r|\n', 8) # 8 >[Text.RegularExpressions.RegexOptions]::Compiled
     
     Write-Log INFO "Session started. Session ID: $Global:SessionId"
     Write-Log INFO "Environment info:`n$(($PSVersionTable.GetEnumerator() | ForEach-Object {"$($_.Key): $($_.Value)"}) -Join "`n")"
@@ -4201,6 +4224,11 @@ Function Sync-Ets2ModRepo {
         '    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
         '    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
         '    [DllImport("ntdll.dll")] public static extern uint RtlComputeCrc32(uint dwInitial, byte[] pData, int iLen);',
+        '}',
+        'public static class ConsoleHelper {',
+        '    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool FlushConsoleInputBuffer(IntPtr hConsoleInput);',
+        '    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);',
+        '    public const int STD_INPUT_HANDLE = -10;',
         '}',
         'public enum DeleteDisabledOptions {Off = 0, ManagedOnly = 1, All = 2}',
         'public enum ModUpdateState {Installing = 0, Repairing = 1, Updating = 2, Validating = 3, Reinstalling = 4}',
@@ -4455,14 +4483,14 @@ Function Sync-Ets2ModRepo {
         Title       = ($Null, '[Experimental] ')[$Global:IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
         Version     = "Version $Global:ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $Global:Revision)")[$Global:IsExperimental]
-        VersionDate = '2026.02.04'
+        VersionDate = '2026.02.25'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     $Global:ScriptDetails['GitHubFile']  = $Global:ScriptDetails.GitHub + 'blob/main/Client/' + ($Null, 'Experimental/')[$Global:IsExperimental] + "$($Global:ScriptDetails.ShortTitle).ps1"
     [String[]]$Global:UpdateNotes = @(
         '',
-        "4.0$(($Null, ' (EXPERIMENTAL)')[$Global:IsExperimental])",
+        "$Global:ScriptVersion $(($Null, ' (EXPERIMENTAL)')[$Global:IsExperimental])",
         '',
         '- Added experimental support for American Truck Simulator (ATS).',
         '- Added secondary menu for additional options accessible by pressing Page Up [PG UP].',
@@ -4476,8 +4504,8 @@ Function Sync-Ets2ModRepo {
         '- Added disk space check before downloads.',
         '- Added Repository URL selection GUI.',
         '- Added support for Steam Cloud-enabled profiles.',
-        '- Added Steam launch options auto-setup.',
-        '- Added game configuration (config.cfg) auto-setup.',
+        '- [TODO] Added Steam launch options auto-setup.',
+        '- [TODO] Added game configuration (config.cfg) auto-setup.',
         '',
         '- Fixed crash upon selecting "Import load order" from the main menu.',
         '- Fixed crash on startup for users without TS SE Tool installed.',
@@ -4503,7 +4531,6 @@ Function Sync-Ets2ModRepo {
         '- Changed log entry chronology. (Reversed from bottom-to-top).'
     )
     [String[]]$Global:KnownIssues = @(
-        '- Keypress prompts with timeouts often not timing out.',
         '- Script restarts instead of exiting after completion if the active profile was changed earlier in the session.',
         '- Automatic moving of the script if misplaced does not work.',
         '- Option title for inactive managed mod deletion does not reflect pending actions and is misleading.'
@@ -4522,8 +4549,8 @@ Function Sync-Ets2ModRepo {
 
     Get-Variable "T__*" -EA 0 | Remove-Variable -Force -EA 0
 
-    [String]$Global:ActiveProfile         = Get-ActiveProfile
-    [String]$Global:ActiveProfileName     = Convert-ProfileFolderName
+    [String]$Global:ActiveProfile     = Get-ActiveProfile
+    [String]$Global:ActiveProfileName = Convert-ProfileFolderName
 
     If ($Global:ActiveProfile.StartsWith('CLOUD:')) {[IO.DirectoryInfo]$Global:ProfilePath = "$Global:GameCloudRootDirectory\profiles\$($Global:ActiveProfile.Substring(6))"}
     Else                                            {[IO.DirectoryInfo]$Global:ProfilePath = "$Global:GameRootDirectory\profiles\$Global:ActiveProfile"}
@@ -4600,7 +4627,7 @@ Function Sync-Ets2ModRepo {
                 Write-Log INFO 'SelfUpdater : Displaying experimental version information.'
 
                 Write-Host ("`n What's new:`n   " + ($Global:UpdateNotes -Join "`n   ") + "`n")
-                If ($Global:KnownIssues) {Write-Host ("`n Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
+                If ($Global:KnownIssues) {Write-Host (" Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
                 [Void](Read-KeyPress ' Press any key to continue.' -Clear)
                 Clear-Host
             }
@@ -4618,7 +4645,7 @@ Function Sync-Ets2ModRepo {
         Write-Log INFO 'SelfUpdater : Update complete. Displaying update information.'
         Write-Host -ForegroundColor Green $Updated
         Write-Host ("`n What's new:`n   " + ($Global:UpdateNotes -Join "`n   ") + "`n")
-        If ($Global:KnownIssues) {Write-Host ("`n Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
+        If ($Global:KnownIssues) {Write-Host (" Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
         [Void](Read-KeyPress ' Press any key to continue.' -Clear)
         Clear-Host
     }
@@ -4646,7 +4673,7 @@ Function Sync-Ets2ModRepo {
     [Byte]$ActiveDataPadding = ("Active $Global:GameNameShort profile: ", 'Active load order: ' | Sort-Object Length)[-1].Length
     [Byte]$UiLineWidth       = 100
     [String]$UiSeparator     = $Global:UiTab + $Global:UiLine * $UiLineWidth
-    [String]$MenuHeadTxt     = "    $($Global:ScriptDetails.Title)   v$($Global:ScriptDetails.Version)"
+    [String]$MenuHeadTxt     = "    $($Global:ScriptDetails.Title)   $($Global:ScriptDetails.Version)"
     $MenuHeadTxt             = $MenuHeadTxt + (' ' * ($UiSeparator.Length - $MenuHeadTxt.Length))
     Clear-Host
     Write-Ansi " <Cyan><BBlu>$MenuHeadTxt" -Indent 1
@@ -4921,8 +4948,6 @@ Function Sync-Ets2ModRepo {
                 Write-HostX $xPos -Color Red "Failed. See $($Global:SessionLog.Name)".PadRight(48)
                 Write-Host ' ║'
 
-                # Write-Log ERROR (Format-AndExportErrorData $_)
-
                 $OldFile.Refresh()
                 If ([IO.File]::Exists($CurrentMod.FileName)) {Remove-Item $CurrentMod.FileName @Ri_RenGlobal}
                 If ($OldFile.Exists)                         {$OldFile.MoveTo($CurrentMod.FileName)}
@@ -4976,7 +5001,7 @@ Function Sync-Ets2ModRepo {
         }
     }
 
-    Write-Host ($Global:UIRowLine -Replace '┼', '┴')
+    Write-Host ($Global:UiRowLine -Replace '┼', '┴')
     
     Set-Utf8Content versions.txt $NewVersions -NoNewline
     Write-Log INFO 'Updated versions.txt.'
@@ -5016,10 +5041,10 @@ Function Sync-Ets2ModRepo {
     If ($Successes -gt 0)             {Write-Host -NoNewline ('║'.PadRight($Global:UIRowLine.Length - 1) + '║'); [Console]::SetCursorPosition(4, [Console]::CursorTop); Write-Host @TextColor "$Successes $S_PluralMod processed successfully - $TotalStr ($DownloadedStr)"}
     If ($Failures -gt 0)              {Write-Host -NoNewline ('║'.PadRight($Global:UIRowLine.Length - 1) + '║'); [Console]::SetCursorPosition(4, [Console]::CursorTop); Write-Host @TextColor "$Failures $F_PluralMod failed to process"}
     If ($Invalids -gt 0)              {Write-Host -NoNewline ('║'.PadRight($Global:UIRowLine.Length - 1) + '║'); [Console]::SetCursorPosition(4, [Console]::CursorTop); Write-Host -ForegroundColor $ColorB "$Invalids $I_PluralMod failed to validate"}
-    If ($Failures + $Invalids -gt 0)  {For ([Byte]$n = 0; $n -lt 2; $n++) {Write-Host ('║'.PadRight($Global:UIRowLine.Length - 1) + '║')}; [Console]::SetCursorPosition(2, [Console]::CursorTop - 1); Write-Host @TextColor "Exit and restart the updater to try again"}
+    If ($Failures + $Invalids -gt 0)  {For ([Byte]$n = 0; $n -lt 2; $n++) {Write-Host ('║'.PadRight($Global:UiRowLine.Length - 1) + '║')}; [Console]::SetCursorPosition(2, [Console]::CursorTop - 1); Write-Host @TextColor "Exit and restart the updater to try again"}
     
     #Write-Host "`n"
-    Write-Host $Global:UIRowEnd
+    Write-Host $Global:UiRowEnd
     Write-Log INFO 'Session completed. Waiting for user input before continuing to OnExit tasks.'
 
     [Void](Read-KeyPress " Press any key to$(('', " launch $Global:GameNameShort $(('', "+ $($Global:TsseTool.Name) ")[$Global:StartSaveEditor])and")[$Global:StartGame]) exit")
