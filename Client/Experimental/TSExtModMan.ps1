@@ -1,7 +1,7 @@
 #STR_version=4.0;
 #STR_profile=***GAME_PROFILE_PLACEHOLDER***;
 #NUM_start=0;
-#NUM_validate=0;
+#NUM_validatesteam=0;
 #NUM_purge=0;
 #NUM_noconfig=0;
 #STR_loadorder=Default;
@@ -9,19 +9,20 @@
 #STR_server=http://your.domain/repo;
 #STR_offlinedata={};
 #NUM_logretention=0;
-#NUM_experimental=242;
+#NUM_experimental=295;
 #STR_targetgame=ETS2;
 #NUM_autobackup=1;
 #NUM_retainlogs=1;
 #STR_atsprofile=***GAME_PROFILE_PLACEHOLDER***;
-#NUM_drawingspeed=500;
+#NUM_drawingspeed=250;
+#NUM_validatemods=1;
 #PERSIST_END
 
 #***GAME_PROFILE_PLACEHOLDER***
 
 <#
 
-    COPYRIGHT © 2026 RainBawZ
+    COPYRIGHT (C) 2026 RainBawZ
 
     Permission is hereby granted, free of charge, to any person obtaining a copy of this software
     and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -106,9 +107,7 @@ If (!$PSBoundParameters.ContainsKey('InputParam')) {
                     Write-Host -NoNewline -ForegroundColor Red 'Failed to auto-detect sim name. '
                     Write-Host -NoNewline 'Select manually [0: ETS2 | 1: ATS | ESC: Exit]'
                     
-                    #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
-                    #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
-                    [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
+                    [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE))
 
                     Do {
                         If ($Null -ne $T__In) {[Console]::Beep(700, 250)}
@@ -459,9 +458,7 @@ Function Sync-Ets2ModRepo {
 
         Param ([Parameter(Position = 0)][String]$Prompt)
 
-        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
-        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
-        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE))
         Write-Log INFO 'Flushed input buffer.'
 
         [Console]::CursorVisible = $True
@@ -979,7 +976,7 @@ Function Sync-Ets2ModRepo {
         )
 
         [String]$EntryPrefix = $TimeStamp.ToString('[yyyy.MM.dd HH:mm:ss.fff] ')
-        [String]$PaddedType  = $Type.ToUpper().PadRight(6) + ':'
+        [String]$PaddedType  = $Type.ToUpper().PadRight(6) + ': '
 
         If ($NoTimestamp.IsPresent) {$EntryPrefix = ''}
         
@@ -1030,7 +1027,7 @@ Function Sync-Ets2ModRepo {
             [Parameter(ParameterSetName = 'NoIWR', Position = 2)][String]$State,
             [Parameter(ParameterSetName = 'NoIWR', Position = 3)][String]$Hash,
             [Parameter(Mandatory, ParameterSetName = 'IWR')][Switch]$UseIwr,
-            [Parameter(ParameterSetName = 'IWR')][Switch]$Save,
+            [Parameter(ParameterSetName = 'IWR')][String]$SaveAs,
             [String]$Repository = $Global:RepositoryUrl,
             [UInt16]$Timeout    = 15000
         )
@@ -1059,10 +1056,11 @@ Function Sync-Ets2ModRepo {
             Write-Log INFO "Invoke-WebRequest | Initializing WebRequest for download of '$Uri'."
             [Hashtable]$IwrSplat = @{Uri = $Uri; TimeoutSec = $Timeout}
 
-            If ($PSVersionTable.PSVersion.Major -lt 6) {$IwrSplat['UseBasicParsing'] = $True}
-            If ($Save.IsPresent)                       {$IwrSplat['OutFile']         = $File}
+            #TODO: PS7 now is required - This can be removed
+            If ($PSVersionTable.PSVersion.Major -lt 6)  {$IwrSplat['UseBasicParsing'] = $True}
+            If (![String]::IsNullOrWhiteSpace($SaveAs)) {$IwrSplat['OutFile']         = $SaveAs}
 
-            Write-Log INFO "Invoke-WebRequest | Downloading '$Uri' $(('into memory.', "to '$File'.")[$Save.IsPresent])."
+            Write-Log INFO "Invoke-WebRequest | Downloading '$Uri' $(('into memory.', "to '$SaveAs'.")[![String]::IsNullOrWhiteSpace($SaveAs)])."
             
             Try     {Return Invoke-WebRequest @IwrSplat}
             Catch   {Write-Log ERROR "Invoke-WebRequest | Failed to download file: $($_.Exception.Message)"; Throw $_}
@@ -1200,9 +1198,9 @@ Function Sync-Ets2ModRepo {
             [UInt64]$Margin = 0,
 
             [Parameter(Position = 2)]
-            [ValidateRange(1, [UInt64]::MaxValue)]
+            [ValidateRange(1, [Byte]::MaxValue)]
             [Alias('Mul')]
-            [UInt64]$Multiplier = 1,
+            [Byte]$Multiplier = 1,
 
             [String]$Path = $Global:GameRootDirectory
         )
@@ -1222,6 +1220,29 @@ Function Sync-Ets2ModRepo {
         Else         {Write-Log ERROR "Disk space check FAILED : Insufficient disk space. Required $Size $(('', "(+$TotalModifier)")[$TotalModifier -ne 0]) bytes."}
     
         Return $Result
+    }
+
+    Function New-Shortcut {
+        [CmdletBinding()]
+        [OutputType([Void])]
+        Param (
+            [Parameter(Mandatory, Position = 0)][String]$TargetPath,
+            [Parameter(Position = 1)][String]$ShortcutPath,
+            [Parameter(Position = 2)][String]$Arguments,
+            [Parameter(Position = 3)][String]$WorkingDirectory,
+            [Parameter(Position = 4)][String]$Description,
+            [Parameter(Position = 5)][String]$IconLocation
+        )
+
+        [__ComObject]$Shortcut = $Global:wScriptShell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath   = $TargetPath
+
+        If ($Arguments)        {$Shortcut.Arguments        = $Arguments}
+        If ($WorkingDirectory) {$Shortcut.WorkingDirectory = $WorkingDirectory}
+        If ($Description)      {$Shortcut.Description      = $Description}
+        If ($IconLocation)     {$Shortcut.IconLocation     = $IconLocation}
+
+        $Shortcut.Save()
     }
 
     Function Get-StringHash {
@@ -1262,34 +1283,31 @@ Function Sync-Ets2ModRepo {
             [Parameter(Position = 2)][UInt64]$Size
         )
 
-        Write-Log INFO "Received FileHash test request for '$File' with Hash: $Hash$(('', " and Size: $Size")[$PSBoundParameters.ContainsKey('Size')])."
-        If (!$File.Exists) {
-            Write-Log INFO "Test FAILED : Cannot find File '$($File.Name)'."
-            Return $False
+        Write-Log INFO "Received FileHash test request for '$File' expecting hash: $Hash$(('', " and file size: $Size")[$PSBoundParameters.ContainsKey('Size')])."
+
+        [String]$FName = $File.Name
+        
+        If (!$File.Exists) {Write-Log INFO "FAILED - Cannot find file '$FName'."; Return $False}
+        Else               {Write-Log INFO "File '$FName' exists. Size: $($File.Length) bytes. Continuing."}
+
+        If ($Size) {
+            If ($File.Length -ne $Size) {Write-Log INFO "FAILED - File size mismatch for file '$FName'. Expected $Size, got $($File.Length)."; Return $False}
+            Else                        {Write-Log INFO "File size matches expected size for file '$FName'. Continuing."}
         }
-        If ($Size -And $File.Length -ne $Size) {
-            Write-Log INFO "Test FAILED : FileSize Mismatch for File '$($File.Name)' - Expected: $Size, Actual: $($File.Length)."
-            Return $False
-        }
+        Else {Write-Log INFO "No expected file size provided for file '$FName'. Skipped size check."}
 
         Try {
             [UInt64]$Buffer        = [Math]::Pow(2, [Math]::Floor([Math]::Log([Math]::Min($File.Length, [GC]::GetTotalMemory($False) / 4), 2)))
             [IO.FileStream]$Stream = [IO.FileStream]::New($File, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read, $Buffer)
+            Write-Log INFO "Initialized FileStream for file '$FName', buffer size $Buffer bytes."
 
             [String]$ComputedHash = [BitConverter]::ToString($Global:CryptoProvider.ComputeHash($Stream)) -Replace '-', ''
-            If ($ComputedHash -ne $Hash) {
-                Write-Log INFO "Test FAILED : Computed FileHash Mismatch for File '$($File.Name)' - Expected: '$Hash', Actual: '$ComputedHash'"
-                Return $False
-            }
-            Else {
-                Write-Log INFO "Test PASSED : Computed FileHash Match for File '$($File.Name)'"
-                Return $True
-            }
+            Write-Log INFO "Hash for file '$FName' computed successfully."
+
+            If ($ComputedHash -ne $Hash) {Write-Log INFO "FAILED - Hash mismatch for file '$FName'. Expected '$Hash', got '$ComputedHash'."; Return $False}
+            Else                         {Write-Log INFO "PASSED - Computed hash matches expected hash for file '$FName'.";                  Return $True}
         }
-        Catch   {
-            Write-Log ERROR "Test FAILED : Failed to compute FileHash for File '$($File.Name)':` $($_.Exception.Message)"
-            Return $False
-        }
+        Catch   {Write-Log ERROR "FAILED - Failed to compute hash for file '$FName'. $($_.Exception.Message)"; Return $False}
         Finally {$Stream.Dispose()}
     }
 
@@ -1491,9 +1509,7 @@ Function Sync-Ets2ModRepo {
             Write-Host @PromptSplat
         }
 
-        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
-        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
-        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE))
         Write-Log INFO 'Flushed input buffer.'
 
         If ($PSCmdlet.ParameterSetName -eq 'Timeout') {
@@ -1554,9 +1570,7 @@ Function Sync-Ets2ModRepo {
             [Console]::SetCursorPosition($InitPos.X, $InitPos.Y)
         }
         
-        #$Host.UI.RawUI.FlushInputBuffer() # Flush option A
-        #While ([Console]::KeyAvailable) {[Void][Console]::ReadKey($True)} # Flush option B
-        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE)) # Flush option C
+        [Void][ConsoleHelper]::FlushConsoleInputBuffer([ConsoleHelper]::GetStdHandle([ConsoleHelper]::STD_INPUT_HANDLE))
         Write-Log INFO 'Flushed input buffer.'
 
         Return $KeyPress
@@ -1697,19 +1711,16 @@ Function Sync-Ets2ModRepo {
             [Switch]$OnFile
         )
 
-        Write-Log INFO 'Received profile format conversion request.'
+        Write-Log INFO "Received profile decryption request for '$File'."
 
-        [IO.FileInfo]$UnitDecoder = Get-GameUnitDecoder
-        [String]$DecodeCommand    = "& '$UnitDecoder'" + (" '$File' '$OutFile'", " --on_file -i '$File'")[$OnFile.IsPresent]
-        [Object]$DecoderResult    = Invoke-Expression $DecodeCommand
+        [Byte[]]$Raw = [SIIDecryptSharp.Decryptor]::Decrypt($File, $True)
 
-        Write-Log INFO "Profile unit decoder finished with exit code $LASTEXITCODE`n($DecoderResult).`nCommand: $DecodeCommand"
+        Write-Log INFO "Profile unit decrypted successfully. Writing bytes ($($Raw.Count)) to '$OutFile'."
 
-        Switch ($LASTEXITCODE) {
-            0       {Break}
-            1       {Break}
-            Default {Throw $DecoderResult}
-        }
+        [IO.File]::WriteAllBytes($OutFile, $Raw)
+
+        Write-Log INFO "Successfully decrypted profile unit '$File' to plaintext unit '$OutFile'."
+
         If ((Get-ProfileUnitFormat $OutFile) -eq 'Binary') {Throw 'Profile unit decoder failed to convert to plaintext profile text format.'}
     }
 
@@ -1830,7 +1841,7 @@ Function Sync-Ets2ModRepo {
 
     Function Convert-SteamId {
         [CmdletBinding(DefaultParameterSetName = 'Auto')]
-        [OutputType([UInt32], [UInt64], [String])]
+        [OutputType([UInt32], [UInt64], [String], [PSCustomObject])]
         Param(
             # Accepts:
             # - SteamID64: 7656119...
@@ -1838,21 +1849,21 @@ Function Sync-Ets2ModRepo {
             # - SteamID2: STEAM_0:1:12345
             # - SteamID3: [U:1:12345]
             [Parameter(Mandatory, Position = 0)]
-            [Alias('SteamId','Input','Id')]
+            [Alias('SteamId', 'Input', 'Id')]
             [Object]$SteamIdInput,
 
             [Parameter(Mandatory, Position = 1)]
-            [ValidateSet('SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2', 'ID64', 'ID', 'ID32', 'ID3', 'ID2')]
+            [ValidateSet('SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2', 'ID64', 'ID', 'ID32', 'ID3', 'ID2', 'All', '*')]
             [Alias('To')]
             [String]$Type,
 
-            # Optional hint. If omitted, we auto-detect.
+            # Optional hint. Auto-detect if omitted.
             [Parameter(Position = 2, ParameterSetName = 'Explicit')]
             [ValidateSet('Auto', 'SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2', 'ID64', 'ID', 'ID32', 'ID3', 'ID2')]
             [String]$From = 'Auto'
         )
 
-        Write-Log INFO "Received SteamID conversion request for '$SteamIdInput' to ID type '$Type'. Type hint: '$From'."
+        Write-Log INFO "Received SteamID conversion request for '$SteamIdInput' to $(("ID type '$Type'", "all ID types")[ $Type -Match '\*|All' ]). Type hint: '$From'."
 
         [UInt64]$SteamId64Base = 76561197960265728                   # SteamID64 base value (not an actual SteamID64)
         [String]$IdString      = ($SteamIdInput -As [String]).Trim() # Input as string
@@ -1863,6 +1874,8 @@ Function Sync-Ets2ModRepo {
             'ID'    {'AccountID'; Break}
             'ID3'   {'SteamID3'; Break}
             'ID2'   {'SteamID2'; Break}
+            'All'   {'SteamIDSet'; Break}
+            '*'     {'SteamIDSet'; Break}
             Default {$Type; Break}
         }
         If ($NormType -ne $Type) {Write-Log INFO "Normalized target ID type: '$Type' > '$NormType'."; $Type = $NormType}
@@ -1966,62 +1979,25 @@ Function Sync-Ets2ModRepo {
         [Byte]$Y           = $AccountId % 2
         [UInt32]$Z         = ($AccountId - $Y) / 2
 
+        [PSCustomObject]$AllTypes = [Ordered]@{
+            Original  = "$SteamIdInput"
+            SteamID64 = "$SteamId64"
+            AccountID = "$AccountId"
+            SteamID32 = "$AccountId"
+            SteamID3  = "[U:1:$AccountId]"
+            SteamID2  = "STEAM_0:$($Y):$Z"
+        }
+
         Switch ($Type) {
-            'SteamID64' {Return $SteamId64 }
-            'AccountID' {Return $AccountId }
-            'SteamID32' {Return $AccountId }                 # SteamID32 == AccountID
-            'SteamID3'  {Return "[U:1:$AccountId]" }         # Individual user
-            'SteamID2'  {Return "STEAM_0:$($Y):$Z" }         # Universe 0 is the usual display
-            Default     {Throw "Unknown output SteamID type '$Type'." }
+            'SteamID64'  {Return $SteamId64}
+            'AccountID'  {Return $AccountId}
+            'SteamID32'  {Return $AccountId}         # SteamID32 == AccountID
+            'SteamID3'   {Return "[U:1:$AccountId]"} # Individual user
+            'SteamID2'   {Return "STEAM_0:$($Y):$Z"} # Universe 0 is the usual display
+            'SteamIDSet' {Return $AllTypes}
+            Default      {Throw "Unknown output SteamID type '$Type'."}
         }
     }
-
-    <#Function Convert-SteamId64 {
-        [CmdletBinding()]
-        [OutputType([UInt32], [UInt64], [String])]
-        Param (
-            [Parameter(Mandatory, Position = 0)]
-            [Alias('SteamId')]
-            [UInt64]$SteamId64,
-
-            [Parameter(Mandatory, Position = 1)]
-            [ValidateSet('SteamID64', 'AccountID', 'SteamID32', 'SteamID3', 'SteamID2')]
-            [Alias('To')]
-            [String]$Type
-        )
-
-        Write-Log INFO "Received SteamID64 conversion request for SteamID64 '$SteamId64' to SteamID type '$Type'."
-
-        # SteamID64 base value (not a SteamID64)
-        [UInt64]$SteamId64Base = 76561197960265728
-
-        If ($SteamId64 -lt $SteamId64Base) {
-            Write-Log ERROR "Provided SteamID64 '$SteamId64' is less than the minimum valid SteamID64 value."
-            Throw "Provided SteamID64 '$SteamId64' is less than the minimum valid SteamID64 value."
-        }
-
-        [UInt64]$AccountId64 = $SteamId64 - $SteamId64Base
-
-        If ($AccountId64 -gt [UInt32]::MaxValue) {
-            Write-Log ERROR "Derived AccountID '$AccountId64' exceeds UInt32 max value and cannot be a standard SteamID64."
-            Throw "Derived AccountID '$AccountId64' exceeds UInt32 max value and cannot be a standard SteamID64."
-        }
-
-        [UInt32]$AccountId = $AccountId64
-        [Byte]$Y           = $AccountId % 2
-        [UInt32]$Z         = ($AccountId - $Y) / 2
-
-        Write-Log INFO "Derived AccountID: $AccountId, Y: $Y, Z: $Z."
-
-        Switch ($Type) {
-            'SteamID64' {Return $SteamId64}
-            'AccountID' {Return $AccountId}
-            'SteamID32' {Return $AccountId} # AccountID and SteamID32 are the same
-            'SteamID3'  {Return "[U:1:$AccountId]"}
-            'SteamID2'  {Return "STEAM_0:$($Y):$Z"}
-            Default     {Write-Log ERROR "Unknown SteamID type '$Type'.";Throw "Unknown SteamID type '$Type'."}
-        }
-    }#>
 
     Function Get-SteamUserId {
         [CmdletBinding()]
@@ -2041,8 +2017,19 @@ Function Sync-Ets2ModRepo {
         [IO.FileInfo]$LoginUsersVdf = "$SteamDir\config\loginusers.vdf"
         [PSCustomObject]$VdfData    = Import-Vdf -Path $LoginUsersVdf
 
+        [PSCustomObject[]]$UserTimestamps = @()
+
         ForEach ($SteamId in $VdfData.users.PSObject.Properties.Name) {
             [PSCustomObject]$UserData = $VdfData.users.$SteamId
+
+            $UserTimestamps += [PSCustomObject]@{
+                SteamId     = $SteamId
+                AccountName = $UserData.AccountName
+                PersonaName = $UserData.PersonaName
+                Timestamp   = $UserData.Timestamp
+            }
+
+            <# TODO: Deprecated; $UserData.MostRecent is unreliable - Remove at some point ig.
             If ($UserData.MostRecent -eq '1') {
                 [String]$UserName  = $UserData.AccountName
                 [String]$UserAlias = $UserData.PersonaName
@@ -2054,10 +2041,26 @@ Function Sync-Ets2ModRepo {
                 ElseIf ($IncludeAlias.IsPresent -And !$IncludeName.IsPresent) {Return $UserId, $UserAlias}
                 ElseIf ($IncludeAlias.IsPresent -And $IncludeName.IsPresent)  {Return $UserId, $UserName, $UserAlias}
                 Else                                                          {Return $UserId}
-            }
+            } #>
         }
-        Write-Log ERROR "No most recent Steam user ID found in VDF '$($LoginUsersVdf.Name)'."
-        Throw 'No most recent Steam user ID found.'
+
+        [PSCustomObject]$MostRecent = ($UserTimestamps | Sort-Object -Property Timestamp -Descending)[0]
+
+        If (!$MostRecent) {
+            Write-Log ERROR "No most recent Steam user ID found in VDF '$($LoginUsersVdf.Name)'."
+            Throw 'No most recent Steam user ID found.'
+        }
+
+        [String]$UserName  = $MostRecent.AccountName
+        [String]$UserAlias = $MostRecent.PersonaName
+        [UInt64]$UserId    = [UInt64]::Parse($MostRecent.SteamId)
+
+        Write-Log INFO "Retrieved data for most recent Steam user '$UserId' ($UserName/$UserAlias) from VDF '$($LoginUsersVdf.Name)'."
+
+        If     ($IncludeName.IsPresent  -And !$IncludeAlias.IsPresent) {Return $UserId, $UserName}
+        ElseIf ($IncludeAlias.IsPresent -And !$IncludeName.IsPresent)  {Return $UserId, $UserAlias}
+        ElseIf ($IncludeAlias.IsPresent -And $IncludeName.IsPresent)   {Return $UserId, $UserName, $UserAlias}
+        Else                                                           {Return $UserId}
     }
 
     Function Get-SteamLaunchOptions {
@@ -2172,83 +2175,85 @@ Function Sync-Ets2ModRepo {
         Param (
             [Parameter(Mandatory, ParameterSetName = 'GameRoot')][Switch]$Root,
             [Parameter(Mandatory, ParameterSetName = 'Workshop')][Switch]$Workshop,
-            [Parameter(Mandatory, ParameterSetName = 'Both')][Switch]$Both
+            [Parameter(Mandatory, ParameterSetName = 'Both')][Switch]$Both,
+            [String]$AppId = $Global:GameAppId,
+            [String]$Game  = $Global:GameNameShort
         )
 
         Switch ($PSCmdlet.ParameterSetName) {
-            'GameRoot' {Write-Log INFO "Received $Global:GameNameShort ($Global:GameAppId) Game Root Directory Lookup request."; Break}
-            'Workshop' {Write-Log INFO "Received $Global:GameNameShort ($Global:GameAppId) Workshop Directory Lookup request."; Break}
-            'Both'     {Write-Log INFO "Received $Global:GameNameShort ($Global:GameAppId) Game Root + Workshop Directory Lookup request."; Break}
+            'GameRoot' {Write-Log INFO "Received $Game ($AppId) Game Root Directory Lookup request."; Break}
+            'Workshop' {Write-Log INFO "Received $Game ($AppId) Workshop Directory Lookup request."; Break}
+            'Both'     {Write-Log INFO "Received $Game ($AppId) Game Root + Workshop Directory Lookup request."; Break}
             Default    {Throw [Management.Automation.ParameterBindingException]::New("Invalid parameter set name '$_'.")}
         }
         
-        [IO.FileInfo]$LibVdf = "$Global:SteamRoot\SteamApps\libraryfolders.vdf"
+        [IO.FileInfo]$LibraryVdf = "$Global:SteamRoot\SteamApps\libraryfolders.vdf"
 
-        If (!$LibVdf.Exists) {
-            Write-Log ERROR "Steam Library VDF '$LibVdf' does not exist."
-            Throw [IO.FileNotFoundException]::New("Steam Library VDF '$LibVdf' does not exist.")
+        If (!$LibraryVdf.Exists) {
+            Write-Log ERROR "Steam Library VDF '$LibraryVdf' does not exist."
+            Throw [IO.FileNotFoundException]::New("Steam Library VDF '$LibraryVdf' does not exist.")
         }
 
-        Write-Log INFO "Importing Steam Library VDF '$LibVdf' for $Global:GameNameShort SteamApps Directory lookup."
-        [PSCustomObject]$VdfData = Import-Vdf -Path $LibVdf
+        Write-Log INFO "Importing Steam Library VDF '$LibraryVdf' for $Game SteamApps Directory lookup."
+        [PSCustomObject]$SteamLibraryData = Import-Vdf -Path $LibraryVdf
 
-        ForEach ($Entry in $VdfData.libraryfolders.PSObject.Properties.Name) {
-            If ($VdfData.libraryfolders."$Entry".apps.PSObject.Properties.Name.Contains("$Global:GameAppId")) {
-                [String]$Path                = $VdfData.libraryfolders."$Entry".path
+        ForEach ($Entry in $SteamLibraryData.libraryfolders.PSObject.Properties.Name) {
+            If ($SteamLibraryData.libraryfolders."$Entry".apps.PSObject.Properties.Name.Contains($AppId)) {
+                [String]$Path                = $SteamLibraryData.libraryfolders."$Entry".path
                 [IO.DirectoryInfo]$SteamApps = "$Path\SteamApps"
-                Write-Log INFO "Located $Global:GameNameShort SteamApps Directory at: '$SteamApps'."
+                Write-Log INFO "Located $Game SteamApps Directory at: '$SteamApps'."
                 Break
             }
         }
 
         If (!$SteamApps.Exists) {
-            Write-Log ERROR "Failed to locate $Global:GameNameShort SteamApps Directory in Steam Library VDF data. (Segment: '$Path'; Lookup result: '$SteamApps')"
-            Write-Log INFO "Restarting Steam may resolve this issue if $Global:GameNameShort was recently installed or moved to another install folder."
-            Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Global:GameNameShort SteamApps Directory in Steam Library VDF data.`nRestarting Steam may resolve this issue if $Global:GameNameShort was recently moved or installed.")
+            Write-Log ERROR "Failed to locate $Game SteamApps Directory in Steam Library VDF data. (Segment: '$Path'; Lookup result: '$SteamApps')"
+            Write-Log INFO "Restarting Steam may resolve this issue if $Game was recently installed or moved to another install folder."
+            Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Game SteamApps Directory in Steam Library VDF data.`nRestarting Steam may resolve this issue if $Game was recently moved or installed.")
         }
-        Else {Write-Log INFO "Located $Global:GameNameShort SteamApps Directory at: '$SteamApps'."}
+        Else {Write-Log INFO "Located $Game SteamApps Directory at: '$SteamApps'."}
 
-        [IO.FileInfo]$AppWorkshopAcf = "$SteamApps\workshop\appworkshop_$Global:GameAppId.acf"
+        [IO.FileInfo]$AppWorkshopAcf = "$SteamApps\workshop\appworkshop_$AppId.acf"
 
         If (!$AppWorkshopAcf.Exists) {
-            Write-Log ERROR "Unable to locate $Global:GameNameShort App Workshop ACF '$AppWorkshopAcf'."
-            Write-Log INFO "Restarting Steam may resolve this issue if $Global:GameNameShort was recently installed or moved to another install folder."
-            If (!$Root.IsPresent) {Throw [IO.FileNotFoundException]::New("Unable to locate $Global:GameNameShort App Workshop ACF '$AppWorkshopAcf'.`n`nRestarting Steam may resolve this issue if $Global:GameNameShort was recently moved or installed.")}
+            Write-Log ERROR "Unable to locate $Game App Workshop ACF '$AppWorkshopAcf'."
+            Write-Log INFO "Restarting Steam may resolve this issue if $Game was recently installed or moved to another install folder."
+            If (!$Root.IsPresent) {Throw [IO.FileNotFoundException]::New("Unable to locate $Game App Workshop ACF '$AppWorkshopAcf'.`n`nRestarting Steam may resolve this issue if $Game was recently moved or installed.")}
         }
 
-        Write-Log INFO "Importing $Global:GameNameShort Workshop data from ACF '$AppWorkshopAcf'."
+        Write-Log INFO "Importing $Game Workshop data from ACF '$AppWorkshopAcf'."
         [PSCustomObject]$WorkshopData = Import-Vdf -Path $AppWorkshopAcf
 
-        [IO.DirectoryInfo]$WorkshopDir = "$SteamApps\workshop\content\$Global:GameAppId"
+        [IO.DirectoryInfo]$WorkshopDir = "$SteamApps\workshop\content\$AppId"
 
         If (!$WorkshopDir.Exists) {
-            Write-Log ERROR "Unable to locate $Global:GameNameShort Workshop Directory '$WorkshopDir'."
+            Write-Log ERROR "Unable to locate $Game Workshop Directory '$WorkshopDir'."
 
             If ([String]::IsNullOrWhiteSpace($WorkshopData.AppWorkshop.WorkshopItemsInstalled)) {
-                Write-Log INFO "No Workshop items installed for $Global:GameNameShort - Missing Workshop directory is expected."
+                Write-Log INFO "No Workshop items installed for $Game - Missing Workshop directory is expected."
             
                 [Void][IO.Directory]::Create($WorkshopDir)
                 Write-Log INFO "Created empty Workshop Directory at '$WorkshopDir'."    
             }
             Else {
-                Write-Log ERROR "Unable to locate $Global:GameNameShort Workshop Directory '$WorkshopDir'."
-                Write-Log INFO "Restarting Steam may resolve this issue if $Global:GameNameShort was recently installed or moved to another install folder."
-                If (!$Root.IsPresent) {Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Global:GameNameShort Workshop Directory '$WorkshopDir'.`n`nRestarting Steam may resolve this issue if $Global:GameNameShort was recently moved or installed.")}
+                Write-Log ERROR "Unable to locate $Game Workshop Directory '$WorkshopDir'."
+                Write-Log INFO "Restarting Steam may resolve this issue if $Game was recently installed or moved to another install folder."
+                If (!$Root.IsPresent) {Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Game Workshop Directory '$WorkshopDir'.`n`nRestarting Steam may resolve this issue if $Game was recently moved or installed.")}
             }
         }
-        Else {Write-Log INFO "Successfully Located $Global:GameNameShort Workshop Direcory at: '$WorkshopDir'."}
+        Else {Write-Log INFO "Successfully Located $Game Workshop Direcory at: '$WorkshopDir'."}
         
         # If the user provided -Workshop, return the workshop directory
         If ($Workshop.IsPresent) {Return $WorkshopDir}
 
         # Otherwise the user must have provided -Root, so we locate and return the game's root/install directory
-        [IO.FileInfo]$AppManifestAcf = "$SteamApps\appmanifest_$Global:GameAppId.acf"
+        [IO.FileInfo]$AppManifestAcf = "$SteamApps\appmanifest_$AppId.acf"
 
         If (!$AppManifestAcf.Exists) {
-            Write-Log ERROR "Unable to locate $Global:GameNameShort App Manifest ACF '$AppManifestAcf'."
-            If (!$Workshop.IsPresent) {Throw [IO.FileNotFoundException]::New("Unable to locate $Global:GameNameShort App Manifest ACF '$AppManifestAcf'.")}
+            Write-Log ERROR "Unable to locate $Game App Manifest ACF '$AppManifestAcf'."
+            If (!$Workshop.IsPresent) {Throw [IO.FileNotFoundException]::New("Unable to locate $Game App Manifest ACF '$AppManifestAcf'.")}
         }
-        Else {Write-Log INFO "Performing Game Root Directory Lookup in $Global:GameNameShort App Manifest ACF ('$AppManifestAcf')."}
+        Else {Write-Log INFO "Performing Game Root Directory Lookup in $Game App Manifest ACF ('$AppManifestAcf')."}
 
         [String[]]$AppCacheData = Get-FileContent $AppManifestAcf
         ForEach ($Line in $AppCacheData) {If ($Line -Match $InstallDirPattern) {[String]$InstallDir = "$SteamApps\common\$($Matches[0])"; Break}}
@@ -2256,10 +2261,10 @@ Function Sync-Ets2ModRepo {
         [IO.DirectoryInfo]$RootDir = $InstallDir
 
         If (!$RootDir.Exists) {
-            Write-Log ERROR "Unable to locate $Global:GameNameShort Game Root Directory '$RootDir'."
-            If (!$Workshop.IsPresent) {Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Global:GameNameShort Game Root Directory '$RootDir'.")}
+            Write-Log ERROR "Unable to locate $Game Game Root Directory '$RootDir'."
+            If (!$Workshop.IsPresent) {Throw [IO.DirectoryNotFoundException]::New("Unable to locate $Game Game Root Directory '$RootDir'.")}
         }
-        Else {Write-Log INFO "Successfully Located $Global:GameNameShort Game Root Directory at '$RootDir'."}
+        Else {Write-Log INFO "Successfully Located $Game Game Root Directory at '$RootDir'."}
 
         If ($Root.IsPresent) {Return $RootDir}
 
@@ -2289,41 +2294,6 @@ Function Sync-Ets2ModRepo {
         Return $UnitFormat
     }
 
-    Function Get-GameUnitDecoder {
-        [CmdletBinding()]
-        [OutputType([IO.FileInfo])]
-
-        Param ([String]$DecFile = $Global:RepositoryInfo.DecFile)
-
-        Write-Log INFO "Received Game Unit Decoder '$DecFile' request."
-
-        [IO.FileInfo]$Path = "$Env:Temp\$DecFile"
-        [String]$Checksum  = (Get-ModRepoFile $Global:RepositoryInfo.DecHash -UseIwr).Content
-        Write-Log INFO "Expected FileHash for '$DecFile' is: '$Checksum'."
-
-        If (!$Path.Exists) {
-            Write-Log INFO "Decoder not found at '$($Path)'. Downloading from repository."
-            If ($Global:OfflineMode) {
-                Write-Log ERROR "$($Global:ScriptDetails['ShortTitle']) is running in Offline Mode. Unable to download file '$DecFile'."
-                Throw 'Offline mode is enabled. Unable to download files.'
-            }
-
-            [IO.File]::WriteAllBytes($Path, [Byte[]](Get-ModRepoFile $DecFile -UseIwr).Content)
-            Write-Log INFO "Game Unit Decoder downloaded and saved to '$Path'."
-        }
-
-        If (!(Test-FileHash $Path $Checksum)) {
-            Write-Log ERROR "'$DecFile' failed to validate - FileHash mismatch. The file will be deleted."
-
-            $Path.Delete()
-
-            Throw "Failed to validate '$DecFile' - Checksum mismatch"
-        }
-        Write-Log INFO 'Game Unit Decoder is ready.'
-
-        Return $Path
-    }
-
     Function Get-ModData {
         [CmdletBinding()]
         [OutputType([Hashtable])]
@@ -2349,7 +2319,8 @@ Function Sync-Ets2ModRepo {
         Return $ParsedData
     }
 
-    Function Install-CoreMod { # TODO: Not yet implemented
+    Function Install-CoreMod {
+        # TODO: Not yet implemented
         [CmdletBinding()]
         Param ()
         Return
@@ -2765,22 +2736,6 @@ Function Sync-Ets2ModRepo {
         }
     }
 
-    Function Start-DefaultWebBrowser { # TODO: This function is deprecated and will be removed in a future version
-        [CmdletBinding()]
-        [OutputType([Void])]
-
-        Param ([Parameter(Mandatory)][String]$Uri)
-
-        [String]$BrowserName = (Get-ItemProperty HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice).ProgId
-        If ($BrowserName -eq 'AppXq0fevzme2pys62n3e0fbqa7peapykr8v') {Start-Process Microsoft-Edge:$Uri}
-        Else {
-            [Void](New-PSDrive HKCR Registry HKEY_CLASSES_ROOT -Scope Global -EA 0)
-            [String]$BrowserPath = [Regex]::Match((Get-ItemProperty HKCR:\$BrowserName\shell\open\command).'(default)', '\".+?\"')
-
-            Start-Process $BrowserPath $Uri
-        }
-    }
-
     Function Start-SteamWorkshopPage {
         [CmdletBinding()]
         [OutputType([Void])]
@@ -2816,8 +2771,14 @@ Function Sync-Ets2ModRepo {
         
         [Byte]$UiLineWidth      = 100
         [String]$SetAndContinue = '; Update-ProtectedVars; $Save = $False; Continue'
-        [String]$OrderRunText   = 'Update active mods'
-        [String]$AllRunText     = 'Update all mods'
+        [String]$OrderRunText   = 'Update'#active mods'
+        [String]$AllRunText     = 'Update'#all mods'
+        If ($Global:ValidateMods) {
+            $OrderRunText += ' & validate'
+            $AllRunText   += ' & validate'
+        }
+        $OrderRunText += ' active mods'
+        $AllRunText   += ' all mods'
         If ($Global:ValidateInstall) {
             $OrderRunText += ' + verify integrity'
             $AllRunText   += ' + verify integrity'
@@ -2830,14 +2791,6 @@ Function Sync-Ets2ModRepo {
         If ($Global:StartGame) {
             $OrderRunText += " + launch $Global:GameNameShort"
             $AllRunText   += " + launch $Global:GameNameShort"
-            If ($Global:StartSaveEditor -And $Global:TsseTool.Installed) {
-                $OrderRunText += " + launch $($Global:TsseTool.Name)"
-                $AllRunText   += " + launch $($Global:TsseTool.Name)"
-            }
-            ElseIf ($Global:StartSaveEditor -And !$Global:TsseTool.Installed) {
-                Write-Log WARN "Override triggered for option '$StartSaveEditor' (Launch $($Global:TsseTool.Name)): $($Global:TsseTool.Name) is not installed."
-                $Global:StartSaveEditor = $False
-            }
         }
         [Byte]$ActiveDataPadding = ("Active $Global:GameNameShort profile: ", 'Active load order: ' | Sort-Object Length)[-1].Length
         [String]$UiSeparator     = $Global:UiTab + $Global:UiLine * $UiLineWidth
@@ -2866,7 +2819,8 @@ Function Sync-Ets2ModRepo {
             Write-HostFancy "`n$UiSeparator`n"
 
             Write-HostFancy " $Global:UiTab[1]       Launch $Global:GameName upon completion`n" -Fg ([Console]::ForegroundColor, 'Green')[$Global:StartGame]
-            Write-HostFancy " $Global:UiTab[$((' ', 2)[$Global:TsseTool.Installed])]       Launch $($Global:TsseTool.Name) with $Global:GameName" -Fg ('DarkGray', ([Console]::ForegroundColor, 'Green')[$Global:StartSaveEditor])[$Global:TsseTool.Installed]
+            #TODO: TSSE functionality is deprecated and will be removed in a future release. Remove this option from the menu.
+            Write-HostFancy " $Global:UiTab[$((' ', 2)[0])]       Launch TSSE with $Global:GameName" -Fg ('DarkGray', ([Console]::ForegroundColor, 'Green')[0])[0]
 
             Write-HostFancy "`n$UiSeparator`n"
 
@@ -2879,6 +2833,8 @@ Function Sync-Ets2ModRepo {
             Write-HostFancy " $Global:UiTab[6]       Save current options $(('', '[SAVED]')[$Saved.IsPresent])" -Fg ([Console]::ForegroundColor, 'Green')[$Saved.IsPresent]
 
             Write-HostFancy "`n$UiSeparator`n"
+
+            Write-HostFancy " $Global:UiTab[7]       Export load order from active profile`n"
         }
         Else {
             Write-Log INFO 'Displaying secondary menu options.'
@@ -2900,9 +2856,10 @@ Function Sync-Ets2ModRepo {
             Write-HostFancy "      $Global:UiTab[6]       Set draw frequency for transfer rate display (Current: $Global:DrawFrequency ms)" -Fg DarkCyan
 
             Write-HostFancy "`n$UiSeparator`n" -Fg DarkCyan
+
+            Write-HostFancy "      $Global:UiTab[7]       $(('Enable', 'Disable')[$Global:ValidateMods]) mod validation on update`n" -Fg DarkCyan
         }
 
-        Write-HostFancy " $Global:UiTab[7]       Export load order from active profile`n"
         Write-HostFancy " $Global:UiTab[8]       Import custom load order"
 
         Write-HostFancy "`n$UiSeparator`n"
@@ -2934,7 +2891,7 @@ Function Sync-Ets2ModRepo {
             # SPACE / 32 - No update (load order only)
             # 0     / 48 - Change profile
             # 1     / 49 - Start game
-            # 2     / 50 - Start save editor
+            # 2     / 50 - Start save editor [DISABLED]
             # 3     / 51 - Delete inactive mods
             # 4     / 52 - Validate install
             # 5     / 53 - Skip load order config
@@ -2949,6 +2906,7 @@ Function Sync-Ets2ModRepo {
             # 4     / 52 - Toggle log retention
             # 5     / 53 - Set log retention time
             # 6     / 54 - Set draw frequency
+            # 7     / 55 - Toggle mod validation on update
             Switch ($Choice) {
                 33 { # [PGUP]
                     Write-Log INFO "$_ : [PGUP] ('Toggle primary/secondary menu') selected."
@@ -2999,12 +2957,14 @@ Function Sync-Ets2ModRepo {
                 }
                 50 { # [2]
                     If (!$Global:MenuToggle) {
+                        <# TODO: TSSE functionality is deprecated and will be removed in a future version. Remove this option from the menu.
                         If (!$Global:TsseTool.Installed) {
                             Write-Log WARN "Aborted: Choice invalid as $($Global:TsseTool.Name) is not installed."
                             Return '$Global:StartSaveEditor = $False' + $SetAndContinue
                         }
                         Write-Log INFO "$_ : [2] ('Start save editor') selected."
-                        Return '$Global:StartSaveEditor = $Global:StartGame -And !$Global:StartSaveEditor' + $SetAndContinue
+                        Return '$Global:StartSaveEditor = $Global:StartGame -And !$Global:StartSaveEditor' + $SetAndContinue#>
+                        Return '$Global:StartSaveEditor = $Global:StartSaveEditor' + $SetAndContinue
                     }
                     Else {
                         Write-Log INFO "$_ : [2] ('Set Repository URL') selected."
@@ -3060,7 +3020,10 @@ Function Sync-Ets2ModRepo {
                         Return 'Export-LoadOrder; Continue'
                         Export-LoadOrder
                     }
-                    Else {Write-Log WARN "Aborted: No action for '$_' in secondary menu."; Break}
+                    Else {
+                        Write-Log INFO "$_ : [7] ('Toggle mod validation on update') selected."
+                        Return '$Global:ValidateMods = !$Global:ValidateMods' + $SetAndContinue
+                    }
                 }
                 56 { # [8]
                     If (!$Global:MenuToggle) {
@@ -3086,7 +3049,8 @@ Function Sync-Ets2ModRepo {
         }
     }
 
-    Function Confirm-Choice { #TODO: This function is currently unused and is subject to removal in a future version
+    Function Confirm-Choice {
+        #TODO: This function is currently unused and is subject to removal in a future version
         [CmdletBinding()]
         [OutputType([Bool])]
 
@@ -3242,7 +3206,8 @@ Function Sync-Ets2ModRepo {
         Return $NewUrl, $RepositoryInfo, $CacheUpdate
     }
 
-    Function Write-HostFancy { #TODO: "This function will be deprecated in a future version"(TM)
+    Function Write-HostFancy {
+        #TODO: "This function will be deprecated in a future version"(TM)
         [CmdletBinding()]
         [OutputType([Void])]
 
@@ -3635,7 +3600,8 @@ Function Sync-Ets2ModRepo {
         Return $Return
     }
 
-    Function Get-ContrastingColor { # TODO: This function is deprecated and will be removed in a future version
+    Function Get-ContrastingColor {
+        # TODO: This function is deprecated and will be removed in a future version
         [CmdletBinding(DefaultParameterSetName = 'ForColor')]
         [OutputType([ConsoleColor])]
 
@@ -4028,38 +3994,6 @@ Function Sync-Ets2ModRepo {
         If ($DialogInteraction -eq 'OK') {Return [IO.FileInfo]$Browser.FileName}
     }
 
-    Function Assert-TsseNamingScheme {
-        [CmdletBinding()]
-        [OutputType([String])]
-
-        Param ()
-
-        Write-Log INFO 'Searching for TS SE Tool directory.'
-        [String]$RootName           = $Global:TsseTool.RootDirectory.Name
-        [String]$Executable         = $Global:TsseTool.Executable.Name
-        [IO.FileInfo[]]$Executables = Get-ChildItem -Path $Global:GameRootDirectory -Filter $Executable -File -Recurse -Depth 2 | Sort-Object LastWriteTime -Descending
-
-        If ($Executables.Count -eq 0) {
-            Write-Log WARN "    No executables found in '$Global:GameRootDirectory'. Using '$RootName'"
-            Return $RootName
-        }
-
-        [IO.DirectoryInfo]$Target = $Executables[0].Directory
-
-        If ([String]::IsNullOrWhiteSpace($Target)) {Write-Log WARN "    Unable to locate TS SE Tool directory. Using '$RootName'"; Return $RootName}
-        If ($Target.Name -eq $RootName)            {Write-Log INFO "    Success: '$RootName'"; Return $RootName}
-        Write-Log INFO "    Success: '$Target'"
-        Try {
-            Rename-Item $Target $RootName
-            Write-Log INFO "Renamed '$Target' to '$RootName'"
-            Return $RootName
-        }
-        Catch {
-            Write-Log WARN "Failed to rename '$Target' to '$RootName':`n$($_.Exception.Message)"
-            Return $Target.Name
-        }
-    }
-
     Function Get-RepositoryInfo {
         [CmdletBinding()]
         [OutputType([PSCustomObject])]
@@ -4143,6 +4077,267 @@ Function Sync-Ets2ModRepo {
         Return $Days
     }
 
+    Function Compress-Base64Item {
+        [CmdletBinding(DefaultParameterSetName = 'File')]
+        [OutputType([String])]
+
+        Param (
+            [Parameter(Mandatory, Position = 0, ParameterSetName = 'File')]
+            [Alias('$File', 'Path')]
+            [IO.FileInfo]$FilePath,
+
+            [Parameter(Mandatory, ParameterSetName = 'Base64')]
+            [Alias('B64')]
+            [String]$Base64,
+
+            [Parameter(Mandatory, ParameterSetName = 'String')]
+            [String]$String,
+
+            [Parameter(ParameterSetName = 'String')]
+            [Text.Encoding]$Encoding = [Text.UTF8Encoding]::New($False),
+
+            [ValidateSet('Brotli', 'GZip', 'ZLib', 'Deflate')]
+            [String]$Algorithm = 'Brotli',
+
+            [ValidateSet('Optimal', 'Fastest', 'NoCompression', 'SmallestSize', 0, 1, 2, 3)]
+            [IO.Compression.CompressionLevel]$CompressionLevel = [IO.Compression.CompressionLevel]::SmallestSize,
+
+            [ValidateRange(-1, 11)]
+            [Int]$AdvancedCompression
+        )
+
+        [Byte[]]$Bytes = Switch ($PSCmdlet.ParameterSetName) {
+            'File'   {If ($FilePath.Exists) {[IO.File]::ReadAllBytes($FilePath); Break} Else {Throw "File not found: $FilePath"}}
+            'Base64' {[Convert]::FromBase64String($Base64); Break}
+            'String' {$Encoding.GetBytes($String); Break}
+            Default  {Throw "Invalid parameter set: $_"}
+        }
+
+        If ($Algorithm -eq 'Brotli') {
+            [IO.Compression.BrotliCompressionOptions]$BrotliOptions = [IO.Compression.BrotliCompressionOptions]::New()
+            If ($PSBoundParameters.ContainsKey('AdvancedCompression')) {
+                If     ($AdvancedCompression -lt 0)  {Throw "AdvancedCompression must be between 0 and 11 for $Algorithm"}
+                ElseIf ($AdvancedCompression -gt 11) {Throw "AdvancedCompression must be between 0 and 11 for $Algorithm"}
+                Else                                 {$BrotliOptions.Quality = $AdvancedCompression}
+            }
+            Else {
+                $BrotliOptions.Quality = Switch ($CompressionLevel) {
+                    {[IO.Compression.CompressionLevel]::Optimal}       {4; Break}
+                    {[IO.Compression.CompressionLevel]::Fastest}       {1; Break}
+                    {[IO.Compression.CompressionLevel]::NoCompression} {0; Break}
+                    {[IO.Compression.CompressionLevel]::SmallestSize}  {11; Break}
+                    Default                                            {Throw "Invalid CompressionLevel: $_"}
+                }
+            }
+        }
+        Else {
+            [IO.Compression.ZLibCompressionOptions]$ZlibOptions = [IO.Compression.ZLibCompressionOptions]::New()
+            $ZlibOptions.CompressionStrategy                    = [IO.Compression.ZLibCompressionStrategy]::Default
+            If ($PSBoundParameters.ContainsKey('AdvancedCompression')) {
+                If     ($AdvancedCompression -lt -1) {Throw "AdvancedCompression must be between -1 and 9 for $Algorithm"}
+                ElseIf ($AdvancedCompression -gt 9)  {Throw "AdvancedCompression must be between -1 and 9 for $Algorithm"}
+                Else                                 {$ZlibOptions.Quality = $AdvancedCompression}
+            }
+            Else {
+                $ZlibOptions.CompressionLevel = Switch ($CompressionLevel) {
+                    {[IO.Compression.CompressionLevel]::Optimal}       {-1; Break}
+                    {[IO.Compression.CompressionLevel]::Fastest}       {1; Break}
+                    {[IO.Compression.CompressionLevel]::NoCompression} {0; Break}
+                    {[IO.Compression.CompressionLevel]::SmallestSize}  {9; Break}
+                    Default                                            {Throw "Invalid CompressionLevel: $_"}
+                }
+            }
+        }
+
+        [IO.MemoryStream]$MemStream = [IO.MemoryStream]::New()
+        [Byte[]]$Compressed         = @()
+
+        Try {
+            Switch ($Algorithm) {
+                'Brotli'  {[IO.Compression.BrotliStream]$Compressor  = [IO.Compression.BrotliStream]::New($MemStream, $BrotliOptions, $True); Break}
+                'GZip'    {[IO.Compression.GZipStream]$Compressor    = [IO.Compression.GZipStream]::New($MemStream, $ZlibOptions, $True); Break}
+                'ZLib'    {[IO.Compression.ZLibStream]$Compressor    = [IO.Compression.ZLibStream]::New($MemStream, $ZlibOptions, $True); Break}
+                'Deflate' {[IO.Compression.DeflateStream]$Compressor = [IO.Compression.DeflateStream]::New($MemStream, $ZlibOptions, $True); Break}
+                Default   {Throw "Invalid Algorithm: $_"}
+            }
+            Try     {$Compressor.Write($Bytes, 0, $Bytes.Count)}
+            Catch   {Throw $_}
+            Finally {$Compressor.Dispose()}
+
+            $Compressed = $MemStream.ToArray()
+
+            If ($Compressed.Count -gt $Bytes.Count) {Throw}
+        }
+        Catch   {$Compressed = $Bytes}
+        Finally {
+            If ($Compressor) {$Compressor.Dispose()}
+            If ($MemStream)  {$MemStream.Dispose()}
+        }
+
+        [String]$Encoded = [Convert]::ToBase64String($Compressed)
+
+        Return $Encoded
+    }
+
+    Function Expand-Base64Item {
+        [CmdletBinding(DefaultParameterSetName = 'Default')]
+        [OutputType([Byte[]])]
+
+        Param (
+            [Parameter(Mandatory, Position = 0)]
+            [Alias('$B64')]
+            [String]$Base64,
+
+            [ValidateSet('Brotli', 'GZip', 'ZLib', 'Deflate')]
+            [String]$Algorithm = 'Brotli',
+
+            [Parameter(Mandatory, ParameterSetName = 'File')]
+            [IO.FileInfo]$OutFile,
+
+            [Parameter(ParameterSetName = 'File')]
+            [Text.Encoding]$Encoding = [Text.UTF8Encoding]::New($False),
+
+            [Parameter(ParameterSetName = 'File')]
+            [Switch]$Force,
+
+            [Parameter(ParameterSetName = 'File')]
+            [Switch]$PassThru
+        )
+
+        Write-Log INFO "Received $Algorithm item decompression request."
+
+        If ($PSCmdlet.ParameterSetName -eq 'File') {
+            $OutFile.Refresh()
+            If (!$OutFile.Directory.Exists) {Throw "Could not find part of the path '$($OutFile.Directory)'."}
+        }
+
+        [IO.Compression.CompressionMode]$CompressionMode = [IO.Compression.CompressionMode]::Decompress
+
+        #[Text.UTF8Encoding]$Utf8    = [Text.UTF8Encoding]::New($False)
+        [Byte[]]$CompressedBytes    = [Convert]::FromBase64String($Base64)
+        [IO.MemoryStream]$InStream  = [IO.MemoryStream]::New($CompressedBytes)
+        [IO.MemoryStream]$OutStream = [IO.MemoryStream]::New()
+
+        Write-Log INFO "Decoded Base64 string of length $($Base64.Length) into $($CompressedBytes.Count) bytes of compressed data."
+
+        Try {
+            Switch ($Algorithm) {
+                'Brotli'  {[IO.Compression.BrotliStream]$Decompressor  = [IO.Compression.BrotliStream]::New($InStream, $CompressionMode); Break}
+                'GZip'    {[IO.Compression.GZipStream]$Decompressor    = [IO.Compression.GZipStream]::New($InStream, $CompressionMode); Break}
+                'ZLib'    {[IO.Compression.ZLibStream]$Decompressor    = [IO.Compression.ZLibStream]::New($InStream, $CompressionMode); Break}
+                'Deflate' {[IO.Compression.DeflateStream]$Decompressor = [IO.Compression.DeflateStream]::New($InStream, $CompressionMode); Break}
+                Default   {Throw "Invalid Algorithm: $_"}
+            }
+
+            Write-Log INFO "Decompressing $($CompressedBytes.Count) bytes to MemoryStream using $Algorithm."
+
+            Try     {$Decompressor.CopyTo($OutStream)}
+            Catch   {Throw $_}
+            Finally {$Decompressor.Dispose()}
+
+            [Byte[]]$Decompressed = $OutStream.ToArray()
+
+            Write-Log INFO "Decompressed data size: $($Decompressed.Count) bytes."
+        }
+        Catch   {Write-Log ERROR $_.Exception.Message; Throw $_<#[Byte[]]$Decompressed = $CompressedBytes#>}
+        Finally {
+            If ($Decompressor) {$Decompressor.Dispose()}
+            If ($MemStream)    {$MemStream.Dispose()}
+        }
+
+        Write-Log INFO "Expanded to byte array of $($Decompressed.Count) bytes."
+
+        If ($PSCmdlet.ParameterSetName -eq 'File') {
+
+            #TODO: Add Base64 check for $Decompressed before writing to file
+            $OutFile.Refresh()
+            If     (!$OutFile.Directory.Exists)             {Throw "Could not find part of the path '$($OutFile.Directory)'."}
+            ElseIf ($OutFile.Exists -And !$Force.IsPresent) {Throw "Output file '$OutFile' already exists. Use -Force to overwrite."}
+            ElseIf ($OutFile.Exists -And $Force.IsPresent)  {Write-Log INFO "Output file '$OutFile' already exists. Overwriting due to -Force."}
+            
+            Try {
+                [IO.File]::WriteAllBytes($OutFile, $Decompressed)
+                Write-Log INFO "Decompressed data written to '$OutFile'"
+                If ($PassThru.IsPresent) {
+                    $OutFile.Refresh()
+                    Return $OutFile
+                }
+            }
+            Catch {Throw $_}
+        }
+        Else {
+            #[Byte[]]$Decoded = [Convert]::ToBase64String($Decompressed)
+            Return $Decompressed
+        }
+    }
+
+    Function ConvertTo-PowerShellBase64Literal {
+        [CmdletBinding()]
+        [OutputType([String])]
+
+        Param (
+            [Parameter(Mandatory, Position = 0)]
+            [Alias('$B64')]
+            [String]$Base64,
+
+            [Parameter(Position = 1)]
+            [Alias('Var')]
+            [String]$VariableName = 'Base64',
+
+            [ValidateRange(1, 5000)]
+            [Alias('Max')]
+            [UInt16]$MaxLength = 200,
+
+            [ValidateRange(1, 5000)]
+            [Alias('Min')]
+            [UInt16]$MinLength = 75,
+
+            [Alias('Tab')]
+            [String]$Indent = '    '
+        )
+
+        Write-Log INFO 'Received Base64 string to PowerShell Base64 literal conversion request.'
+
+        Try {
+            If (![Regex]::IsMatch($VariableName, '(?i)^[A-Z_][A-Z0-9_]*$')) {Throw "Invalid VariableName. '$VariableName' is not a valid PowerShell variable name."}
+            If ($MinLength -gt $MaxLength)                                  {Throw "MinLength ($MinLength) cannot be greater than MaxLength ($MaxLength)"}
+            If (![Regex]::IsMatch($Indent, '^[ \t]*$'))                     {Throw "Invalid Indent string '$($Indent)'. Indent cannot contain non-whitespace characters or line breaks."}
+        }
+        Catch {
+            Write-Log ERROR $_.Exception.Message
+            Throw $_
+        }
+
+        [Text.StringBuilder]$Builder = [Text.StringBuilder]::New()
+        [UInt32]$InputLength         = $Base64.Length
+        [Double]$BestDiff            = 1
+
+        For ([UInt16]$Length = $MinLength; $Length -le $MaxLength; $Length++) {
+            [Double]$Diff = [Math]::Ceiling($InputLength / $Length) - $InputLength / $Length
+            If ($Diff -lt $BestDiff) {
+                $BestDiff           = $Diff
+                [UInt16]$LineLength = $Length
+                If ($Diff -eq 0) {Break}
+            }
+        }
+
+        Write-Log INFO "Found optimal line length of $LineLength for Base64 string of length $InputLength ($BestDiff difference)."
+
+        [Void]$Builder.AppendLine("[String]$VariableName = @(")
+        For ([UInt32]$Index = 0; $Index -lt $InputLength; $Index += $LineLength) {
+            [UInt32]$Count = [Math]::Min($LineLength, $InputLength - $Index)
+            [Void]$Builder.Append("$Indent'")
+            [Void]$Builder.Append($Base64, $Index, $Count)
+            If ($Index + $Count -lt $InputLength) {[Void]$Builder.AppendLine("',")}
+            Else                                  {[Void]$Builder.AppendLine("'")}
+        }
+        [Void]$Builder.AppendLine(") -Join ''")
+
+        Write-Log INFO "Successfully converted Base64 string to PowerShell Base64 literal with variable name '$VariableName'."
+        
+        Return $Builder.ToString()
+    }
+
     Function Import-DotNetTypes {
         [CmdletBinding()]
         [OutputType([Void])]
@@ -4154,8 +4349,8 @@ Function Sync-Ets2ModRepo {
 
         Write-Log INFO 'Received .NET type import request.'
 
-        [String[]]$AssemblyNames = @()
-        [String[]]$TypeNames     = @()
+        [String[]]$AssemblyNames     = @()
+        [String[]]$TypeNames         = @()
 
         If ($PSBoundParameters.ContainsKey('Assemblies')) {$Assemblies | ForEach-Object {$AssemblyNames += "Assembly: $_"}}
         If ($PSBoundParameters.ContainsKey('TypeDefinitions')) {
@@ -4186,13 +4381,58 @@ Function Sync-Ets2ModRepo {
             Write-Log INFO "Imported $($TypeNames.Count) type definitions."
         }
     }
+
+    Function Import-EmbeddedLibraries {
+        [CmdletBinding()]
+        [OutputType([Void])]
+
+        Param (
+            [Parameter(Mandatory, Position = 0)]
+            [Alias('Data')]
+            [Hashtable]$AssemblyData
+        )
+
+        Write-Log INFO 'Received embedded library import request.'
+
+        [UInt16]$LongestAssemblyName = ($AssemblyData.Keys | Sort-Object Length)[-1].Length + 4
+
+        ForEach ($Entry in $AssemblyData.GetEnumerator()) {
+            [String]$AssemblyName = $Entry.Key
+            [String]$Base64Data   = $Entry.Value
+
+            Write-Log INFO "Import assembly '$AssemblyName'."
+
+            Write-Host -NoNewline (($T__Tab * 5) + "Assembly: $AssemblyName...".PadRight($LongestAssemblyName))
+
+            [IO.FileInfo]$AssemblyFile = "$Env:TEMP\$AssemblyName.dll"
+
+            If (!$AssemblyFile.Exists) {
+                Write-Log INFO "Assembly '$AssemblyName' not found in temp directory. Extracting assembly..."
+
+                [Byte[]]$AssemblyBytes = Expand-Base64Item -Base64 $Base64Data -Algorithm 'Brotli'
+
+                Write-Log INFO "Successfully expanded embedded assembly '$AssemblyName'. Exporting to '$AssemblyFile'."
+
+                [IO.File]::WriteAllBytes($AssemblyFile, $AssemblyBytes)
+
+                Write-Log INFO "Exported assembly bytes to '$AssemblyFile'. Importing DLL."
+            }
+            Else {Write-Log INFO "Assembly already exported. Importing DLL."}
+
+            Add-Type -Path $AssemblyFile
+
+            Write-Log INFO "Successfully imported assembly '$AssemblyName' from '$AssemblyFile'."
+            Write-Host -ForegroundColor Green 'OK'
+        }
+        Write-Log INFO "Imported $($AssemblyData.Keys.Count) embedded assemblies."
+    }
     Write-Host -ForegroundColor Green "OK - $($T__StepTimer.ElapsedMilliseconds)ms`n"
 
     [String]$T__SimDir              = ('Euro Truck Simulator 2', 'American Truck Simulator')[$T__Game -eq 'ATS']
     [IO.FileInfo]$Global:SessionLog = [IO.Path]::Combine([Environment]::GetFolderPath('MyDocuments'), $T__SimDir, 'mod', "$Global:SessionId.log.txt")
     [Regex]$Global:RxLineEndings    = [Regex]::New('\r\n|\r|\n', 8) # 8 >[Text.RegularExpressions.RegexOptions]::Compiled
     
-    Write-Log INFO "Session started. Session ID: $Global:SessionId"
+    Write-Log INFO "Session started. Session ID '$Global:SessionId'"
     Write-Log INFO "Environment info:`n$(($PSVersionTable.GetEnumerator() | ForEach-Object {"$($_.Key): $($_.Value)"}) -Join "`n")"
     
     Trap {Wait-WriteAndExit ("`n`n FATAL ERROR`n " + (Format-AndExportErrorData $_))}
@@ -4235,7 +4475,176 @@ Function Sync-Ets2ModRepo {
         'public enum ModRepairAction {None = 0, Entry = 1, File = 2}'
     ) -Join "`n"
 
+    [Hashtable]$T__EmbeddedAssemblies = @{
+        SiiDecryptSharp = @(
+            'i/9CAICqqqrqn9TMVG1xdwt389hy8XSvzIosz4jMKI8lMyIysyozlozMqNwiMyIjF8/sSE8Py0jP9HDzcveozqisrPKqrqmu6snKrpqu7q6qrurOru6q11VdPVNd',
+            'M11VvU1HzVR1T/fv6unqZaanfy+VVT3VPV31XndP18x0z/RU+v9OfOuceyWZUlk/TTGRnQsFDQ0NH3wwSX47lAoaGgYGfhhYDts9g8HAgQsXwIWQNax5PD1JQoCA',
+            'gNZu78DuI/ehAwZw5Qq8wAHaeorPH762DrjJL7n8jf3KVS+IXa9cNXmqUE2VK8FsJTeXyudKpaCWOuGnKvOlVKGUGtk7kZoLZvzOSMS52ju749tgl9DZlsx+jPDa',
+            '11iZCokM3AooAHjzESAFXAIgSgrQwDDB5fwgrwEaAOgc/zOIQjQb6vnltAfA/Y/AXnxjOaRzKHYXIQy89DGYtCh+8rClwIK0WSnYIUo9Omv+2Rrw2nl7NG6te5oP',
+            'nRQc76xUK3nqR11qLFW3CvXQ2QpbOyt+McjXF41Ff9SdpMlWQylcHdrLj6RxYAegIXnhCIQHQXA4+7EV2rk0GO0rNf18Goz2Fdq5NcKgNVDthGfbwWh/TEu74GjV',
+            'MKi0BkqrNoCTNpLJK1DtK7RzHbmDOtxRawlaK0Qn7YLTvkI716kM6gTt3LXCoGuhMgRloLoI6oLqJhzvBqP9I9qt68BoazlUXwfG+R4wyoTTqlFw0s0VpXoJ6oVa',
+            'T9B60M5tEAZtgOojqA/UprweWJaR5HUQEKt+AZTTHKqaoMJWIEBpnkh/BFRgg7LEI4WILnBAtXRekw8ucEC1di6RDK9d0hmqCChXY+DcrKotoM4fB0M1n8+BUfXA',
+            'WV2NgxNR5Ybd8zkw1LkcGBt7BWTNdO4MPgdG4IISoqN5In0JVOCJYyeIgVrXbAU6yTeC0z+tQc5kPgIqiBJfpXkifQeooBFUNQUqbsSM1C91CBKgOg5qnkiv0rET',
+            'LAeV7OvJ2E7RDRpABU3grEuIs/2YEawANS9hWdAMThaqSY+1BRyHbOsuVTq87gQYbetaVyv1rnoOVLUVnLa4PH8CjJhMC+jY+CEBmcJVK9t5oUnKuxr0PJnyoKNB',
+            'R1qHjnikYeJmzIypxqATBRUzYyqIRyX0YmZMBRFQgSsJioU+vC5mVqPgBM2gYipoAhUsBydudwx6djoBTtyJmUFTdEOnLeYES0EFywQ0y0EFCfguK0AFSVBBCzie',
+            'nV4BzrrnfuZ69rvNJiwLkuD8JKaCVlBrh2Jm9XZQbTEVtIIKzoMKbkU6mHOgglvIereBCuqggiUVo3Hilh0zQwDTBM7aBlHsXQVO3NI84ZmDfHgnz0qvBLXaCiSo',
+            'mBk0gmNq4xcLW9b+75UrnpZuA9WOiILGcW3PX2ouQDxj8JAEDWLGuKanP01VeKTZ6S9LMMaDJlAqWAnhwetD5rYtwEEDmnT4D+C7AlYB/67BeaBHh+sNCHToEvZ4',
+            '+K/Zp0Nc6Iv9e3XYK+CzOszZlD/175NhDaaB/Rp8EVhhgG7Agxp8jLyp7dfA8Ws1+JUO8xr8M/A5ARL4sg3N/xMwyHlx6d9vRGe8anr6k6MltP5ei7L+jKhmynqc',
+            '2P6gU9SHifoxZb2fqK9Q1seI+jhlfZSoOmV9gqgTlPU+okYo616iVlPWnxNlUdYHie7XGsiWnhUjMV81Pf0XVrH9gxazoj5E1FMWZX8J1IWrQXQY9H6zsu50ElWg',
+            'rE9bRO2kbB4AdaGtiKg0ZfMIqAurzaIkZfMRUBeuIbbXBUXzcVAX0kR9jbJ5GNSFNUQ9QuFqSVA4yvlmaXr6Uy2N8rMWvKan7wJ1od171BCFpulrGEwSVP/VFmXd',
+            'TZSirAvE9iso6gNEfYuyLhLb04ygD3UfUR/wUdb9hNYRBCZfNT39qDpqkoIeImqAgnkQ1IWOeIXWscSmoHuyh021HHKUBV8RrAJny63/feVKSzsQz+gMAjrEqilQ',
+            'jtJGCnaCBCgVLAe1NqJiH7RMEX2yryeiND39WEnx7h7suXYJBsSqV4PjqEoflIM2cFarylg6fnVlN5RD2nggQQWrwQn3f94AT0tfA07EDuKg0mlwNj5kgB20gmpb',
+            'Z6xu7JDp2/RxO2+AygBb2QtlO1gHY6dyEMrpNeBUAbZyDMohOyboLwcnbvSHDfCMpRx9GZPBclAD/6VDmr24iqltW4C3tDUB7XOsJzi2FPgvAYeBqzR4XoOdcz/b',
+            'W9q/H5oNGvwd+uLOcQ3eBioaCMHo0/8+uSBgBPiUgPcB39Tg/9fgFQEl8qf2KQH2Lwp4XIMXBDwIbFyjqNdtaGYEXMt58Wj/mxooT3oifQ2ooB2c1f2vKqLSJH2F',
+            'qDUk/R+i2kn6C6I6SDpP1FqSThG1jqQJojpJup6oa0laQ1SGpEaiukjtiiCoh2R+LUAbvxtIS0tPUzig9SR9PXNUL0mfV0RtIOkRovpIej9R/SRViBog6RhRG0na',
+            'QdQmknqI2kzSCqKuI8km6npSeweCBkn6OVFDJH2LqGGSvkDUKEmXiBoh6c+J2kZsHQtBH8kD2kFsHYek0HaSRoHGSOoF6iZpJdBWkqJAW4i7npFeAc7GX/3PlSs/',
+            'cz1jY54tqpKbwkKr7E6FzmpPS3eAs3E4F1bt3WaLgtoZ9dNrwVHBOnCCzptXtMHeRzHofxpIGvD3BriPFdjXgC7gJQP+Qze8Ip4xaAckxBqo+FDWWw47HulrwQky',
+            '4AiCTXeBk+4uD1s8o3j8cRGWmDa+bmPHhmVO9WpwQqY+fpHjiKmNB0tBVQpQVhcLYU9zCPXMqvFAc6TjgLn83rUg2pr18cfaWvLxKx5ra60EUH6sbYmtLhbSq0E9',
+            '1ra0UoXyY23LlP3Bq0Gke8EJ1oPzWHqD49i3Ww5FbHWx0P24GayrNjrEM4r7ALPegxzyqfD7Fb5aAtbmSMf2Cp+9PfxYFT/QX0Mfzyg+DFj1GxTirNrF+bfgNlCV',
+            '/Eh/CacYbg8BNoPCnFXjnN1+sA1E+tq+PkFPMdpWCnAYFOGcz/R/H6icg3LcUPaDRWU/WEz3gXN41XXFQ/Q0KPvB4iqA73r5wb6dld1Zwlel+8GJy+ZwRzImrfvj',
+            'ylOV90E5PQBOzEh3gRM3rJZDYSsmLxa6f1y5B8oxZTjWEVf2g4Wwp1XuhXK6G5y4Ebszt5jRsx9sW66+cuVK0OLctwoxyOWPwKwBkd7It28PAWEGNXDOv2YMmmtA',
+            'pDfx7dtDQIRBUc7519TVpEGkN/Pt278JcBnkcM7j/Q8LUPbDnpG+DpyBR4GY0dy9Y8ie+d5Uafs3CjAT68N59CGCf/ixtuWVR6F8DWT7/b8GlP1wOg3O2iFzmffz',
+            '6JP+Cgc+Dij7g2tBpG8AtXZbq79v69jZ5N+DeSFcthx795IfOsQzij8BDX0/KMZZ188BUTyXPkeq+wMt7wK+QtkPBydBnaleD056J6jH2loqz0P5sbZWZT8cnLIo',
+            'aAk0S5X9cHCGwrKs8tXy0p1wtBuuELd4RvHHz6dw2ccoTv7De4LW/1QsfhfWfaBCcYomDMa3kdCUwfizgdBu0jQmtm8AMQY1cs7WcW5AfLcHAdgqz0O56cVW+epd',
+            '+egy0nVLywYfzyiaBXjtGtTEOVv/N/r3e2oFp+pFvke9QMxyZT8cHO78sRKcpAyZj2cUVQHxOA1q5qztasF3bEk3UKfW5v70i0DfCFTSUUo1/maFsh8O3sO4Je2C',
+            'aZOOsh8OjpsUFCKYsLIfDvIUFOmEk9r33yX5eEYxKaCxDwa1cFZJvqvC/NY8GKjXfaCjnKz3UPzcHK9/D3LaiWcUB4EmiHncqYZOKyx7vBWWhe7bsTnprXDrCrXN',
+            '+iPn8W5zKyy70YbW3wyOpjtLH88oBoHmfhzWtSBAffxo16rKP0K5iILUreUweazX5dYPtDCSBu5Vsn5Sd9+Vj2cUB4BWP4NZAsseXzLA4qHKOSiHPNKD4Kx1Pd5t',
+            'XtLaoFBJY5mFlKa6bgeAJQxmKSx7fGk5RQ0RtZRzbtPAUgazDJY9vozisWFw1rZ6pEfAaep0Pd5tXlbieeY2aRmDWQ7LHl9OUduIWs45t7uA5QwmAcseT1D8mlFw',
+            '1m5RYU9Lj4KzLuTp7zYtgWV2R9jT0tvBqe4AJ+Lp6TFwUleuQNOhBOcxxDOSjWP4lHujoT64se3grG5TeyvMg3e+71GCQSv4I1DHRpyfeA507/nAdhewgsEkYdnj',
+            'yQrHy/Whnf2QtJOydlHUbQQlOZtVXAckGYwHyx736hXvdcai0jsv/g+mZ3q6+10mXPa1V3PS3X3tdaf2lKelrwNnrWN2L1vH1imMq2tW/vFpZVw72j1ueXBl3Gkx',
+            'K49CWVUe9Ru3NnBWP2Wgj2ckC8BV9RoUnteiQjc9p+iHQGpfXNJS2JapXXFJy1eH0lQRMd6xfRhYyaBIXYaWtJdC3n0Q+RdUpm5dWkJtzktaQelOPbdngVUMcskU',
+            '4qx1sX0csM/Ws6qXpK2W71JLOo04ycczkg8CV7dhkEcmm29YT4J6Uhxuu1unlLmWwzWhgjPkn4ywj2cktoC2zxbjvC9wUdBCKhmr38kyB+NJMinXILaEOQbKdW+6',
+            'JG1z91OU02VckiFz71NU2DGXZMTcmBblElqDuS0tKkpJavoOl9hoNSU18Cdyd8t4Gxsd5US9hxN1nLPVZ3m6hkEp/gjMahDp3Xyr9M9x4k6z07H01s1gaOMq2PNW',
+            'J7+2Y53W3K5aDjlKGw8y4HT/pKUd4hmNTwNpiFXOQdlpID0OzsB9QAPpfeAUz8Pd59+KK8PVM/BltLLbEw/tAyfdD06oOdyxzLTuj3j6M/B0UKW7wHGslkNhy7xY',
+            '6P555R4oa9g6mn3wziNwOa8JpGMnklvu7QLR9t33gJHeD05983uc2XIi2WZEHSPqOtDOXf/mZ9D1oJ3bIgzaAuqroOsK7dxWZdBWqAPvm1KDBA2Clj6kpIYIGgLt',
+            '3LAwaBhqhKAR0NLZ7NQ2graBlj6hpEYJGgXt3HZh0HZwqbN2ELQD6jTUGEFjUHNQNxB0A9ROgnZC7SJoF1QZajdBu6HeC7WHoD1QewnaC9q5cWHQOFD63duwxTMG',
+            '3Z9Hcnrl6JXpCXCc9FpwtHH9hrSEDpVW0JE2oSM4CI6u36AOTbb7wHYNsIa046h714IINYc7XNN6GYWHH7NaDoUt1ff/zHbiGZ39QDvERjCmN5neI9RxnZlcffo9',
+            'hbDVfK1hNR0JWy2Hw2Zy9emjIaupK2UlV1+7TKUPgXPrdWBYH4p4evUwOOkj4DjmukXVXq9v1p2M7JA2rt+QzrYO69JDk+1tC+ogVzv5dheoSyR7R/UAqDYlW7Bf',
+            'kK2ToPxGrSVfw6CRdHfdRstz1UOuMu0XZJokWw+C6tOwXQOsI62OujdSTq4PUNAcNA+ACmaheQBUUIDmAVBBkbE6yeWR6wKj5dfVLPzRtlxMdaRQzO3SteRyyXWR',
+            '0Uo8Y3yXIbbqCceZ9gsyTZLpIJmOkOkYmab7M3S+DWQgVvVNMu0XZJok00EyHSHTMTJNkylH9rUzoNqCw6AKpx0VMlNXGuD0dMhMYcHpwyEzaZ8ItbUF+0CZZw4F',
+            '+0GpsJUM58NWBrawBXfDVtI+EW5rC6ZAWWcODSPM8VYXuRrIdR/l7RqgO1+uKLnuZ1SvOR2lqB5ytZFvD4D6OKn60TGK6iXXNeT6CB/oPUCtDFpPrg7y7UFQj1LQ',
+            'NEVtINcacj3MBzoOtIJBfeRaTb49AuoTFJSjqH5ypcn1cT7QCaAWBg2Q62ry7RKoR0iXdUUbSYtTTW1OqKUdwSVi2ssD1yAPexOsqu91c5/EztXAJojphg+8Wgtm',
+            'wFGBD85aS1PBSXDaK7uh3B7PKL4jYDPEqreDctSrPtjqoNQ6FtUCvAUdwS2gWon6Ln4vdQXYulaACgzfP7gVlArOg0rPghMyLxZas/euBRGu7IZypDlu9L8MxIzW',
+            'Y+sOxozmrv0xw7xYaD3c3dJh2S3BKXAiduWnUA4K4Kx7y06nwVnXouzK5eeJ6WAPOEEdlGVeLLRmY0Zr9rD9WEFwZsz4YAbEZi7t2+kucCIxw7xYaDncs7WjuLOr',
+            'uZRwJGa0HIobMcO8WNjSdeXKFVX51+pFNT/xhA8y4LQcDk6/lRS6QR1Ux3RzXHZct6DSx1VMNnc1q7a3OLFehrJ5mjQtpsTJxWTLobiMyT5A6/7iObZ1IVX5n+6L',
+            '1/O/riNXM7k+zWje4TzclZp9YLSf3ALhkJb6pQ7n94OhNZ+fAKP9Zi0PVj8D6vwkGFrzvRkQ5w+AscaG538HXA8xLX0GHKc55OEJT0s/A2pdqCLFd4yCs1IThcKe',
+            'HtMPXtlupSby1eGeQx5m+rOgIva5A2A49rlJMM5NgHFvBkTckA4mLmOGJ61Rz566WEj/NajVdsw4fwCMmOFUnwQV0dcerQ+lCEoSD8VUqqe0U3R2xlRqaGJsrLMl',
+            'pqqIQ9d4mOmnQZ07AEa7h5n+nCR2KwOCcrUIzs3qu1qwBgcEbLl3Df3V1TlwnOpnQIUaC60+xXPh5og2frFgH17a7ZnauJ0+Bs75/WDYSw+puZNMdS/Vxu20hI5k',
+            '6iKFM6FjtZ1M2UVFGRQlrWE7GSXcFqMJYnXu0yZ0xI106X1h/oq3ToERBODEpBWUwYnJmAxuBCcmgwo4QRWcuKrWwImbMTOmWqrz4MStmBUzmmPGxUJwEzgxK3gv',
+            'OCpmBmfBCRbA+dnVMWutGbOCJDg/iZlrzZgZpLHJtWZMgmPVJ0G1qeBmcM4fAKPNPD85ztgVadB4h6tbRfhdQqy/YvPV6bA+x80ZoNcd4WrAdtvOTYKhjV8snJ8Q',
+            'xUOpiUJhz/n9YLRp4+cPgNH+75m/eR2aGBuDW/oqUA5wdYn51L0ZEG3fnSb2psBoZ1lGJ/mdTbSYsVBHTe6u0W1xfmatNponf0Zz+3eR2AVoakK5IEoI7xHPGBSB',
+            'QYhpupE+B46xbrz13gwIR1fNrcEt4KxWzfcnG6ZXdKrqeXBuVs33r1Yt9ydT08vya5Wcx1ruX62a708h4Ihquf9QMnlsbbMeHaOlR1VvBedmGd63PZ6R7AaGIFat',
+            'gdNmNMvgJnDamk8Ht4HTXH0WVLUGjqOCOjj6zpIKbgeny9ZVcDs4c5MqOAuOpu8spe8Apzl0cW6k268HDaC078rBN4B6V7Rfryt4IAfGu6IdhiZuGBIIeA8LX81N',
+            'vZ2Zzp5MT9cAgKQIpFKw6la4kIJUE6yaqFUKpdkqwNPr4U4Bqw5MkOn7XjAOrtp+YGwE2NoH37Zh1VAxOAE4roE4+Ohja2wH+G/RQzMIYPMzUuyQB54HXgXu2JfD',
+            'UAP0uKHR8NwZjaE8bDo+IPW1Xv5PlwXAbWEBgOJO5x1X8U/OO67i6/ZP3QYaG0DxO3tzSPFV576IYrdzX0ThOPdFFNc490UUn3buiyh+bN8XURSdd1xFT8SKKG6N',
+            'WhHFZ+13XIeT5KTLw/Y7rkO7yEnFMmFFhvmCC4od7pGY4nqsiMdv3ZcbPVZGXm5UvB5eJz1+GH65sZlvhG+OKH4VXiebed28OaK41rYiil9GrIhipbAiS0lYTa5i',
+            'jJxUpC0rotgYsSKKJmFFFHs1K6L4BVZEsUKzIopW3YoovmtZEcWYbkUUfwhZEUVP6EhMYYetiOJe14oo3nGsiOIq14ooYtF3XMXHGq2IoteyIoqOmBVRHMSK7OSx',
+            'CCh+Zq2Tiq9GrIhHQ+TlRo9XzZcbFT+MWBGAawwAgUAImItKdz0CgSDKbindAdIIBFFWu9IdoAMLQZRNYekOsI4Igig/ikp3gPUsRQj4UoN019PPVQiiTLnSHWAz',
+            'VyGI8pgr3QE20wZE+ViDdAe4jj18kijfikoXrmccQZRbhXQHuJ59CKK8IaSbYStTCKI8okm3l0EOI4jyUV26/QxxFEGUH+nS3cw28giiTArpDjDKSQRRviikO8IO',
+            'ziCIUtGku4MxSgiizOnS3cUN3Iggyl/q0h1nN2cRRBm2pTvAHs4hiJJ3pTvAPu5AEOUaV7oD7OczCKLskdIdYJInEUT5vivdAaZ4CiHgKlu66znIMwiiPN4g3QGO',
+            'IcH7fCUs3TmO8SyCKEeldAc4xl+DgIwBAxzjC+giigAGOM4XaBJwE7DADC/QJOCABkPbqxP+vSu1TfaqqfqHQ31qqn4x1Kem6n8b6lNT9edDfWqq/l2rT03VF60+',
+            'NVXfY/Wpqfp2q09N1X2rT03V32P1qan6w/SpqfqH6FNT9VusPjVVn7f61FT9Q1afmqpfsPrUVL1J9KmpuhJ9aqr+C/rUVP0H9Kmp+pjep6bqG/U+NVVv1fvUVN3S',
+            '+9RUvU/0qan6Xq1PTdW3an1qqr5C61NTdVfrU1P1x8N9aqr+8XCfmqr/MNSnpup/LfvUVD1r9Kmp+q1Gn5qqD4s+NVW/IPrUVP0Fo08J4uYmJegwtyjBsLlFCf5B',
+            'bVeC/1bbVYxHZK8SPKu2K8FtarsSPGPeoASPqN1KcM4cV4JnZa8SJNUhJXTsPKu2K8Eb6qiKZviHmWNaTdV3imk1VX9ATKsY74/mVZy4lVeC78tZJXhTzirBH+Ws',
+            'EoTVrBL0qFklGFWzSnBYzSpBUc0qwfdlrxK8KXuV4I+yVwnCqlcJelSvEoyqXiU4rHqVoKh6leDD5mklOGHOKcEbarcqG88pCvZ2pUiFtivFoFtWiv2yppr5ZGOt',
+            '9vE9fxc5q6bqJ2Nn1VT9a/Ksmqr/rvGsmqqn5VnVI97Ub1E94intdtUj/t64Symmw3+uFAP2dqVo5oNK0c4H1XgK4C6r231QCQ5JaK9zH1WCHLS5hk8pjQK0xYan',
+            'lUYF2vc2fErp3AztPQ1PK533Ade66CoMngbOOmg/pwz+Blrf/pIy+Cq0k5HnlORlaI9HvqQk3wGuddFVKP4JOKvBfk4pfgZtq/0lpfgltLfI55TJb6C9IL+kTP4A',
+            'tz80vom1gKHDXZZs+pqysCW0b1hDwiYG7dtWFJul0A5HX1IOK6Edj76iHDqAa110FSH2AWfdY/yzCnEY2vuMn6gQJ6B9wxoSYU5D+7YVJUwV2gb7ORXhHLSt9pdU',
+            'hDuh/aPzunK5AK0eelM18GHwmtZFVxHl0lUAH+HfzbdUlFQbwP0Uw79XMf6hHbh1YdNspqkjb1pbSXUAtyYUM1u5kAHujtgScwkvZfRwdzQmzWWc7ZLATTUmzQSN',
+            '3cB+I540k7wA3auxpHkVx3uA+3U8aa7ivl7gmuJJs43+9cB+NpY0r+E16B7wkuYa7t4A3HWNSbODej9w3V7SXMfdA8Cd9JLmtdy3Ebh3Y0mzi5lNwP3SS5o93L0Z',
+            'uEfjSXM91vXAnYonzT5ObQH2L8NJc4BvQ3cplDQ3sXwrsE/IpHkdx6H9L5LmFl6CrktLmoOkB4F9iaQ5zAPQviuS5jb+AN0ftKS5nQtDwH47lDTH+AF0m+JJcye3',
+            'DAPXoSfN3URHgH3GSpp7OQrtzaGkuY/fQjcvkuYEZ7cB92ORNA+wfBTYD2lJ8yA/ge4ZkTQPc3Y7cP+oJ80s9+0A7qKeNI/xmTHgvuQlzWnGb+h7uD+Lps0cd98A',
+            '3DNWp3mC/p1jJu3n2boT4P7Wr7t9Zp7D+lw58nrwX5dvhIZEnput4ay9xiYzzx0S2gPGFjPPn0N70thkzvAhaIvGFnOGR4BrXXQVPp8GzqoYm0yfp6E9a2wxfb4A',
+            'XOuiqzjJV4GzLhmbzJO8DO0TxhbzJN8BrnXRVczyT8BZTxubzFl+Bu2zxhZzll9Ca8hN5il+A60jt5in+AN0UbnJLMAuYJvlFrOADVzroqs4TQw4a7ncZJ5mCbQr',
+            '5RbzNCuBa110FWdoB87aa2jiDN3QHjAEZ9gE7UlDE0WGoS0agiK7gGtddBVzTAJnVQxNzHEU2rOGYA4fuNZFV1FiDjjrkqGJEvPQPmEIStwKXOuiqwi4CzjraUMT',
+            'ARehfdYQBHwUWkNqoswnoHWkoMxnoI1KTdzIM9A2S8GNfBG41kVXUeFF4KzlUhMVvgntSimo8D3gWhddRZUfA2eZsRGzyuvQNsV2mFXegjYV3W3W+D20a6P7zBp/',
+            'gu6PzpCYx9gNrB6KMk8E+NZFV3ETrbuvAthCaMq8iUMS2msap82zXIB2KjRl3szb0DU0Tpu3kNwD7KesgnkrGWh/FK+YdfLQ5sQt5h3cCe2/xu4y7+R5aL8u7jfv',
+            '4lfQ7fY+Zt7Nsr3APiqeMD/ALmiXes+YF7gN2tu0L5sX+Qq03/FeNu/jt9DdrH/X/AvGx4H7sv5j8wHS+4DdG/+F+RGOQntn/Dfmg3wQ2rf4b/NhLkG7GNOtR/g+',
+            'tM8TsT7OL6B7KNZsXaJlP7BJPWU9Rhra9vga69NkoX1L67GeoAitHt9sfYZPQNumjVpP8Qy0T3p7rad5A9rficPWX/IOdHd4J6xnuGYC2A+Fi9az9ENbaZy3/oYi',
+            'tD2x26zneBraLQ33Wi/wE+g+ajxifZkXDgD3xfgT1ld568BISOvX+P2B+S6tXyM8RVq+xmpJ3nZMeYJbFfu89TV2HJxR4VbFXrBe5AeHJHDl2AvW3xM5DNxbjS9Y',
+            'L3PDYb9p+Qb79fCtX3f7zG9QPOwX9kletL7BZ6yH5Vs8I4lmqfwW6SPWcP3Rb1vf5vYjpOW73CPJ9+4/AvA+Evyz9V2egN0u/tl6FRAsDZ39FtTD7LcNNJyFYxr/',
+            '2wA6/xYFg2IEJEcsxruCgxIE9RhofDgmDavG30fTf1NRx1D7Z4vvPHv8Sek6wtpHo+m/eegdaQCNgQbQe+X0HTccjWr80QTBNyWpXvO1R2/Sc0//E2rofCUKgt+E',
+            'QQMLBHe4oLErAjrzLhgMRUDw0RgIPhqzWXQFMRZdxRIWXYc1LLpRulh0owyw6EYZZNGNMsaiG2Ufi26Uwyy6UXIsuoIFFl3FPSy6ihtZdBVhFl1FI4uu4o8sulGW',
+            's+gqrrbgu3xZnuZqvthY5mquhM/TyJflaXpZdO/FFq83fghb7LM/iy12xl6ikWfdV9nM76KX2cy+2JssEVVbsdYv/38W/xn+NY38Z/hPNPK/UU08yaKreBLDXinC',
+            'POu+ygi/i14mJ7yma0VOnIz2iif5lrlSjLAv9iYF8bi+WdzI26EhURCZhlGxRrwdGhI50RLWRE6cjI6LNeLt0JTIiZPRWXGVeDs0JHLiYXdI5MTJaEncKO60nxIL',
+            'ItPwV+J28XZoSoyJt0NDYkC8HRoSg+Lt0JBYI87Zb4gHWHRP8xJPRS/zEovuab5NJPQmPyASepOfEAm9yU94KnqZXxAJvcnbREJv8jZPRS/zbRbd03ybp6KXOSze',
+            'Dg2JPxEJvcmfeCp6mS7xdmhI5IQZTem2+HxDm/4AkdCbPMAfncvcL67Et+hPirgY022Bu0e3hWvt0W3xUKOvF8R/hKp6Tnw8+n49LBbdB/WcOBn9hL4gvmP9lb4g',
+            '4uL3+oJ4HWEsiO16g7EgmvWEsSB2ax3GgliuDRgLoj+y3VjLl+V51nIs6huN4vMNZdbyn+FfsyAyDXcZOXEldMHIiZXh+42cuBL6iPGiWNXweeObYtGNslwsuoov',
+            'cq/9A+NV8fnGfzFeFdfLfzFeFU82/tx4VfTJnxuvilfcXxjfZNFVvMqi+3+Nyzxg/8F4lb1hxTd5qPHnxnIhLeRy8VBjSP4Li+5SeZnn5Ep5WSy6im+KRVdxmWci',
+            '18rL/DHSKy/TEt4oHxJvNl4vLSyy0iLMcWkRxZcWjZyWFq0E0mI5NWmRYkFaXM2t0iLN+6TFWu6WFhnulRa9/IW06Oej0mIzj0iLrXxSWozwhLTYwWelxS6ekRbj',
+            'fEFaTPIlaXGIr0mLo7wkLY7zTWkxw3ekxSm+Ly2K/EhalPmptKjxurQ4yy+lxS28LS3q/E5a3Ml/Sou7+R9pcQGUxX1IZfEAjrJ4kAZl8QiNyuIXZKXFrzguLd7G',
+            'lxbHxRJlMSNWKItTYpWyKIq0siiLdUpD6N0qRZ6svIYsf2d3EmKJ3UmclXYnyxi0O1nFDXYnHdxtd9LDo3Ynm3jK7mSY5+1OdnK33ckEd9tbyZOVx8mTlXXyZOUl',
+            '8mTlInmyEpEnK1MiT1ZuFXmy8rjIk5WXRJ6sXBR5svIlcYas/KY4Q1a+JvJk5S/EGbISLU9WprQ8WblVy5OVx7U8WVnX8mTlJS1PVi5qebISPU9WpvQ8WblVz5OV',
+            'x/U8WVnX82TlJT1PVi7qebLyNT1PVr6h58lK3ciTlULmycqrZJ6sHJR5sjIn82Tl7TJPVr4o82TlZZknK4XKk5VXqTxZOajyZOXtKk9WflLlycoXVZ6svKzOkJWX',
+            'VZ6sfNHMk5WXzTxZKaw8WXmVlScrB608WZmz8mTl7VaerPyklScrX7TyZOVlK09WCjtPVl5l58nKQTtPVubsPFl5u50nKz9p58nKF+08WXnZzpOVwsmTlSknT1Zu',
+            'dfJk5XEnT1bWnTxZuejkycrXnDxZmQrlycqtoTxZWQ/lycpLoTxZuRjKk5WvhfJkJeE8WZkK58nK4+E8WVkP58nKxXCerHwtnCcrieTJylQkT1Yej+TJynokT1Yu',
+            'RvJk5WuRPFmZcvNk5VY3T1Yed/NkZd3Nk5WX3DxZuejmyUoa8mRlqiFPVh5vyJOV9YY8WXmpIU9WLjbkycrXGvJkJdE8WSlIAVchuAFYieBWYBWr+B1KhMQukRU1',
+            'URcXxcPiC+JF8Yr4F/Fr8a4Ia0u1tLZBG9EOalntuBZot2r3ao9oX9Be1H6sva79m/Zb7b+0dzWlR/RGvU9f0Ov6c/pX9Zf1V/Qf6j/V39Df0v9bt4xm42qj29hq',
+            '7DEOGDljwXjE+LTxvBGTTbJd6ggMDCQKRZgwDUSI4eLRQJwozcRowWMJcZbSyDKaWEEzSWDQ/akFDzS8bsG9Da9bULDfsqASecuCXfZbFtwn37LAbvqNBb+1fm/B',
+            'ZPS/LHjUwIbfWr+3YJf9lgWNIWnDjGHbUDZsG95v2DY8Zdg2vGjYNrjStmGptG1YLW0bZoyIDWUjYsP7jYgNTxkRG140Ija4MmLDUhmxYbWM2LAkFrMhE22yoTH0',
+            'e0tDoCPQ0NHQkQgMJBoSE4HCRMPCRmBjo+EQQhAihEaECAKXCBoNNCCI0oBGjBgCjxgaceIIGomj0UQTgmaa0GilBcESWtBYyhIEy1iCxnKWIUiwDI0VJBAkSaCx',
+            'jySC/STRmOAqBJNchcYUqxAcZBUah2lDcIQ2NI5yDYJjXIPGe1iDYJo1aBynA0GODjTyrEMwwzo0TnItglmuReMUXQgKdKFxhh4ERXrQKLEeQcB6NG6kD0GFPjSq',
+            'DCCoMYDGPJsQ3MQmNM5yHYIFrkPjHFsQ3MIWNM4ziOBWBtG4jWEEdYZpYjn7eQ838Wf8mLSYEefFB8RHxf8Rfyu+Jf5JvCP+ICytWbta69a2avu0gnZWe7/2Ee2v',
+            'tL/VfqAl9Pv1G43vGL99BI6x9VF4D4uPwjRGHQQA3ARjQbqfiYd62Mbkf1h8Th7rYR2Tv26QF/U9yu3lRgrrfnlzhMI6Jpvcv7uN97W4iiQrSbKKJD08wXqeoI8n',
+            '+AQ9+pPk9M+S0z9HTu8jpwOw+fr89PRIoVou5haGi7lqNTOdYfP1A9PTGTaP+Plgxr/+xLQ8qIvsUBd75ovF3Imif7yLsW2l+Tm/IuEvut/PzewtFRcmyrnS8S52',
+            'Faq1411M+ZVqISh1MT09UcvVCvnBSiW3MFYq1CYXyv5E4Wb/up5uBiuV3MLek1N+vhZU9p7sGSvVerqZrCzs93MzB8ZKtZ5uRvx8MOMfGCvVerqZ8CuFXLFws29A',
+            'DTrBJGmTQYJmxM8HM362cRVNuaqgTQbneGp0vpQ/3s3kfLnoH+9mpJCvFYJSrrJwvBu3cJMLZb+bsZlzTC203YyVaj3dTcBcspkolGaLvjxcKn1HVZ2ph6CeWmc1',
+            'u3pIt5ravBuP19Z3VNXcHBgr1Tb0ekyTbIrFJKnRaxt6STfZqmjKVQVtMjjHJ7u49fVGKJu939TyumJ3VF/ft767Z2jDyNDwQE9mpH94Q1fP+uGh7p6eTFdfT2/v',
+            'wOBI/4bR/uHB3v6hoYH+/t6hnv7R0Z7MSM/QyIbukcH162l9al0bGLWuDWStawNsXRtIN9mq6Kr1rWsDaF0bOG3p6t7Q/Ex9lNXHh50+Zv3a9IHJ0X4nmfopq58P',
+            'f9F+NqzvGxnuHx1e37VhsG9D/4buodFtvduG+vpGR7o2bOvfMDy8YWh992hvX19fZjSzfn1vd9dAX39mYMNI9+jQttEBNu8OZuaL/vVsHq8UbsrV/LG5ctGf80u1',
+            'XK0QlEb8Wq5QrF7PrF+bHqTq16YHgxSfmBlk1q9ND1H1a9NDzPq16WGqfm162Cx1hpn1a9NjI1RPUfvLjo0w69emNahpu42qX5velju91za2rc/0920bzAx1DXd3',
+            'dW3oGRrqWd+zfmBwJLNh/Yah0d6hbb19mcGu7m29fRu6ewbXj2aG+0f6eocHRwf7M91do8z6telRqn5tOo3Xbafq16a3M+vXpndQ9WvTO5juKe1kYqFa8+c6x/Yy',
+            '69emx6ZqjOemuClXnPenpxmaGBubHsnVcszkajmOFAsn8oXXDAfFop+vFYJStXO7X/IrhTyzfm16olaZz9fmK/7YDFXZ2E/Plwo3zvtjM12bnhmbYX5shv1+bobB',
+            'mRm2lfKVhXLNn8FPxWObB68/Mz09lMufKZRmRwt+cYbNQ+KihilqhKLG5GVtMy1qVFzUdoraQfE6Bg8M1j25OV9TXCYXypTdRGG2lKvNV9TldSpXnFd9UFekB4WY',
+            'HX5uxq/oimaoGOTPVCnWAasZkxPM4MxMxa/mLdsJf3bOL9W0ZT+eq9SGg/lSrcCim8oVCzOF2oK29KrBctkvzTBcWSjXgolaxc/N7Q5mfIaDuXLFr1YLQWl3MONf',
+            'XmzMnOK5uWDGZ3BmZn+uNOszmTvjM3wqV5nMnSj6LOvpWcZGCtVyUM2dKPrsny/VCnP+aMEvzuzIlWaK/iUZ6kq17D3ZPX3jrko9fKhePlQ/rCGeBPeWz7mUyaJN',
+            'BgmqaoG90ULRZ9avTe/JzflUE2G6lqe2TNFbdhVK9lgmF8pgm1wo+4yt6CcXyj5TueJ8Ck+dKAb5M5MLZZ+xkeFgrlz0z04ulH0OnvIrvnDJXS/ueYyKaOJdfSYr',
+            'C+O5StVnsjJfyudqPsMVP1fzOVgp1HxGFkq5uUJ+sFarFE7M13yGg7lyoehXtvslv5Kr+TODtVqlcGK+5jPin5ifnc2dKPry1BusVv25E8WFyUJNle1N5iqzfm20',
+            'kpvz3xtUzuQprqOFon958IFBf6x0MqjM5WqFoJQrWp7SGQ5KJwuz85VczVG+s98/OZE76dcW9s8X/WoB6dhwMFcuFHO1QlDa7xdzZ3O1QlCyGebW2PFKMDOfr2VO',
+            's9IOB3PlXGmBNPVudziYK+dqhROFYqFmMSxDC7VewjqVK873EGrKzvq16R25qgD9m3LFeZ+RXC03Ubh58A2ebaV8MFMozQ6lsTpDwqVQmh22rDuoZaJWEQ/L5Gi/',
+            'kJfRfC2f9hXX0oul3VbKBzP+jANOxncUF3u7tzJTKOWK8KJqk4GUy3a/luI6MX+iCl6/O1c7xclC0R/P1U4x69emd/ml2dopJmq5Sq16sFA7xX4/NzOSq+WGikH+',
+            'zIqHyxy+O1QM8mcYLc5XT40WSrmiDDY/X6n4pZoAy64g5yId3xXkc0UmxsZG/HxloVybOJWrlDtnisUAch0KgmJTwzK0UJPh0hw/FARFjhQLJyY7OEb8k8VczZfw',
+            'Zh607PbngsqClqrK4Wb92vRYzZ9bxLHU/Ln+5DEmFubm/FqlkB8szgaVQu3UHGMe8erJSq5UPRlU5thWmp9jMhgKgqKfK1EN5it5f5dfYsav1nb5JWb92vSAYB1g',
+            'dbERlw9myTQRLWN7O2fpYdYs+/2TWwau7PQXNhDpAFW/Nj0eVAu1QlBiT1Ab24uFJ/2ZbWfzfrlWCEoMVmbn5/xSbe98be/J/bnSrK9PRw6UzpSC95YYDsoLkwET',
+            'ZwrlnijMFfG7CqUbGT6Vq3Q36tJYL5SaVJVUx5QZmi8UZ/w8rHP3JFgnF8q+NNaw9YbmT570K8z41VqSB4YKteGgdJNfqfkVJoNdwXtdhEvnbxW2+7W1iaYWVOjM',
+            'n2HN14LKHMppULWg0pawN1LIzZaCaq2QrzLoV1VhmijUOQWh51cm/MpNhbxfZUbF8UJpdncw41fZ7+dmBovFoYWaX2W7X0tAJ0Th9oLrjFaCualccd6vziFQdfuL',
+            'rRjkz1T3wKjJZdavRYSakVJVSp2hibGxA7VCscoARk3b4aBUyxVKJuhMT8yXy0Gl5s8MtHBpod1VKN3Yue3s8h8uuqvxpOoVwTYe1Anb8KlcpTp9BrPDL5b9ihLT',
+            'JqZu7euGZmW+lN9bsK5303amLnez4Jee9WvTO/2FKsNBKZ+rMZKr5SYXyv7YzGhQmcvV2HvitJ+vMVbdVZgr1PyZwWL5VO6EXyM4ebLq1wjK02Nz5WIhX6ix3a9N',
+            '5Yrz/t7KiH8yN1+sUfGr88UahdKMX6oxNpKr5UYrudk5v1RjaDsepgo1qhVDbW2dmWq6BfMpXjZe9UKbt2FiTFEMT05z1G3XH9lVqNYYLVSqNXYHN/l7/LO1kRb6',
+            'k/7ZGuPFXKE06Z91EF4xXswVSjX/bI2bGM/NzBRKs3vm5074laGF3bmzzOXOcgWhPmvYBiuV3MIEmG4U1fSh5bW8GtbtUd2m3XX7SF8z3jxquFeVB+qa7cbf3XyP',
+            '9DVjXS/vlXKjqKYPLa/l1fCmoLtuH+lrxnrT/6gSs6KaXgsv89K1vBreFKQ+cMnwSP8go/o5bdLXjG1sxHo8C6tJLfCe2Y1iHSsVas/PUA1r1hr7Oq3f6i47mKq5',
+            'NOxzyttNSs1Yi1mHgqAow8XRvNJXVZsMzmEnxsamd/oL80loVOcVXObCZae/cLkFP+Hn5yuF2kLnqo2d2UqufGqBwdICw0G58LgWSrmKS8y3U3Whnu6t/r0wVt0z',
+            'XyzurWybK9cWYP0QE4wxRoqb8KlQpUBAiRQlAmqkqDJPmTIBFWr4zEBsggIF9jBPiQI10M+BwEyxkRTIFOdAT4F+HvQRkBtJgZ4F8xgbSYFZokAR5Fm6QV8N8iQZ',
+            'sI+xkRQrQV8JoWNsJMVKVoJ9jI2kSINcSwr0NSA3kQJzDTq810pWgrmRFGnQM6B3QtM0JXLM4VPEp0qVTrBLzFOkCEvGKHETOYoUmCHFSQoU8bXlf9cz5KiRg7Fp',
+            'eiixkxQz+OQJmKFAiVlSFKiSokRAjRQF5ihTZA6fEjV8ZkixgE+NTuDxQ9+7b+ulH+34xA+P/9Uvvvc/z2OkhLD0FEKmhIjFjJQQrmryBoXXqJq8QeG1dpohr163',
+            'vHCTN6bZTd6YZrtea5O3W/MaNa/Ra2zyxjTbbYrtE16r1xpq8gZFk1e/XbPdUJM3ptlN3phmuzIlRByZEloc1eSNabZrpjQRJy7MJm+35jVqMqWJ5a1eVGhak1e/',
+            'R6ygydutrUAzHOE1tkaF1uTV7xEraPLq94gVNHm7tRVo4agQK+ThfawUTbF9Io5qiu0TXquRIo6eQlMpERdxHFO3rCZvTLNdmRJxLD2FZZjCa202Te+A2xTbJ7xG',
+            'r7GpSXwfW6aEd8BVTbF9wms0EJprYriu67oSvPoX9BSuTImEdHVTWBLNdV0jJVzXMo2E5h2wLC2hKfRc8MJNuJZpJFwlDrm2aSS8Q94By9IT3iHLNBKWFs9bYdNM',
+            'hL0DluUmpNQSYQMRiUhEQoYt00iYpjCmZRoJOw1jW6aRCIE1ZJuyIOxYCk1zo5ZtGglvR2ns75BNscMibJtGwuuV0/bappHwMhLajG0aCa8f2n7bNBLeVmi32qaR',
+            '8DZDtzlsak2xw+IEu7IpdlhouilcwxTeIUsPZ7myKXZYWCLKAXKgbCAbKgSeDXmm0RQ7LEy3KXZYmE2xw8KSTbHDwrRMI6HaCilDWuU2xQ4LRXpKmaZoih0WYWXq',
+            'rnfAUqbmZbwDytS83lO4fu+AaereDgMuB7ytpzCbLdNIOEXAOUZK6FYkOirTsyvQHaGbpuEmpCVtNOHVX4nVXzUQlu1Fh2mhZ+mOkJGoEIkVozQ8K1PCTUhl6nbC',
+            'tZVpuCFLtxFNsfq/CN1V5+iplBDROA1orhD17JhCCyekpUzdToRt09TthJc5p3qhdkDXb0tTdxzHEtoMzVZboVl+grFshWZLgrFthaYIRtkKzSQY01ZoDsE4tkIL',
+            'EUzIVmgaYdPskGnMFdyxbd0UdihFk1f/qXa987/b9Z9qths2Te9QQiZc17JciUjIkJESrmWkhObKlOZalmnqdsI7ZIdNMyEt25tJSNuWiIR0m027yRsU0juekFZC',
+            'ese8nOd7BdnkDQppgHdMpoRISCNFQlopzcslZEI6KV14N3q5WP3/mildJKRlOSkhmrz6PSKOTJGIo5tCM0yRkGZKE96NsXkzpVsJaVmGKTzfSAnhyJQQ3o16CsdB',
+            'F179Fa/+imM9s2X6ttgPnY3W8zcfnVrS+9o9hgAMDTB0wDAAQwKGAgwTMCzAsAHDAYwYYHiA0QIYrYCxBDCWAkYbYKwGjGsAIw0YawCjHTA6AGMtYFwLGF2A0Q0Y',
+            'PYDRCxjrAWMDYPQBxgBgbASMzYCxCTCuA4zrAeOXOhgThcIeYyJfHTaGJsbGjJ7STiGEpixdxSxdeVFTNXmDwmvUlK0pTVOuqZq8QeG16so7pKnluoot11VC11RY',
+            'U1JTIV15x3WVkLqKFQ0Vq99tqFj9gqFi9Tt15TVaam3hjpHCi8qUEF7USlEQVjslRAo7egrbSAlhGykhNKOgVuIrW40U3iGZEsI7pKdYbqSEWG4iEjKakHGkFk3I',
+            'qBX1Gu3ocoBfzkbzWqMJGbVMREJGvbBEcy3LQnOjXmvUlQgt6loItyl2WIR1EHqKsJESIqynkEZKCKmnCBkpIUIWmhtNyKhloyXcaEJGLQstHE3IqGWjJcIGoedl',
+            'ogkZtRy0RJKbjeb1KlJNbjaat0ORanKz0bx+RarJzUbzNqeitpokbU4mba1UkEWsqdVCs8WxplYLTYljTa0WmimONbVaaI441tRqoYXEsaZWC00Tx5paImidAB9N',
+            'yKjloruiYbPRvENVTzV5RKElpKtZaN5MNCEtB90dnonaDoaVkFE7IW2ZEprXaKTxolaagcNeGltPo+lpXEV4qtVI4x3S0yzX04T1NJaeRuppQpb4Pj73VggEk1rz',
+            'wUquvCcoPQGKfvJUJXhvVVjip8a5e52gtXPPtsnhoOIPlstrn0+xc91N/Z0ZwaTb+Kw4auQtAezvyc35VueebZOp/s5Mo6DhId64D2GBud8v+rmqL8BOV2emM9OZ',
+            'AUcgu5JYLMH3BuJhGD4y8a+I3eMasB9ofQRab9WjfrNggfjfkITh9CNwWj+I357A7eHp/RMjE68ceHz7Z5/9xtBH3/rAG5/cOrxLAMMbj5bfWz11tN5pOxqcOH20',
+            'xrRHS36tvzNjMdTHkr3yzAkmdgx2r9+AY6qbsD98ZMLf8pXvfO31u1ZNv/JvDx794o+ScwP4/g+/h0eH+cfL6+Ho9HBQGSkWd+cKJeaq+aDi+50zxaIBDFxpI9VM',
+            'vE+GLrrpoZf1bKCPfgbIcYI8M/icZJZTFDjNGYrMUSKgzI1UqFJjnpt4L2dZ4GamneP38Pm+gwwxzAjbGGU7OxjjBnayi93sYS/j7GM/E0xygCkOcojDHGEaaJ/+',
+            '/1ru/961z2nb/vpHGz7+3Wf/rnrj1JavJTd//OdnYnccOeZQVfyMwyKI/r12qJ5ptAjE33XDfd38+/H20CX4k8YhPv8nrReYYoJpptjGfiYYYy97mGaMPYz+8j42',
+            'vmr85l1faIIDnABgC0DG39/A7aE/AgimyFFh9E6KrxqjxEkCAK7GACapkKNElSI5ahQIKPli/xnjqAaCCWpU7qr4wJvt10CQOcbnejlBBthKFMEwAXOUyVFigT33',
+            'f1yA+10+O4JPngoLlKkxwSlyVCgDO4giyoz9EXyq5KlQoFzXvN43f9LXksFi0NTdde4Buugk82/0sINGBGP3iLQVSuQo1n74gTKXTmbuZvEK0mgIduEzS44iwwSU',
+            'WaBCgVlOUeO/NQA7TiOCvTqqUCbnWM93zD+p7CNbiSIYp0LADPPkqbVg+CFfG2RQPkp3I6eumA1H+7EQDFKlis8cJyiyQCrfaTXW/zkPuu9v6KD9anPN/1Py98Bh'
+        ) -Join ''
+    }
+
     Import-DotNetTypes $T__AssemblyList $T__TypeDef
+    Import-EmbeddedLibraries $T__EmbeddedAssemblies
 
     Write-Host -ForegroundColor Green "$($T__Tab * 5)$($T__StepTimer.ElapsedMilliseconds)ms`n"
     $T__StepTimer.Restart()
@@ -4252,7 +4661,7 @@ Function Sync-Ets2ModRepo {
     [IO.FileInfo]$Global:ScriptPath = $PSCommandPath
     [String]$Global:UiLine          = [Char]0x2500
     [String]$Global:UiTab           = ' ' * 4
-    [UInt16]$Global:MinWndWidth     = 120
+    [UInt16]$Global:MinWndWidth     = 160
     [UInt16]$Global:MinWndHeight    = 60
     [Bool]$Global:OfflineMode       = $False
     [Bool]$Global:ClampAvailable    = 'Clamp' -In [String[]][Math].GetMethods().Name
@@ -4278,6 +4687,7 @@ Function Sync-Ets2ModRepo {
         LogRetention     = [Hashtable]@{Index = 14; Type = [Bool]}
         ActiveAtsProfile = [Hashtable]@{Index = 15; Type = [String]}
         DrawFrequency    = [Hashtable]@{Index = 16; Type = [Int]}
+        ValidateMods     = [Hashtable]@{Index = 17; Type = [Bool]}
     }
     [Hashtable]$Global:AllGameInfo = @{
         Ets2 = [Hashtable]@{
@@ -4295,7 +4705,7 @@ Function Sync-Ets2ModRepo {
     }
 
     [__ComObject]$Global:wScriptShell                                                        = New-Object -Com wScript.Shell
-    [Security.Cryptography.SHA1CryptoServiceProvider]$Global:CryptoProvider                  = New-Object Security.Cryptography.SHA1CryptoServiceProvider
+    [Security.Cryptography.SHA1CryptoServiceProvider]$Global:CryptoProvider                  = [Security.Cryptography.SHA1CryptoServiceProvider]::New()
     [Data.Entity.Design.PluralizationServices.PluralizationService]$Global:PluralizerService = [Data.Entity.Design.PluralizationServices.PluralizationService]::CreateService($Global:CurrentCulture)
     
     [Hashtable]$Global:TitleSpecifics           = $Global:AllGameInfo[$T__Game]
@@ -4303,7 +4713,7 @@ Function Sync-Ets2ModRepo {
     [String]$Global:GameName                    = $Global:TitleSpecifics.Name
     [String]$Global:GameNameShort               = $Global:TitleSpecifics.Short
     [String]$Global:GameProcess                 = $Global:TitleSpecifics.Process
-    [IO.DirectoryInfo]$Global:GameRootDirectory = "$([Environment]::GetFolderPath('MyDocuments'))\$Global:GameName"
+    [IO.DirectoryInfo]$Global:GameRootDirectory = [Environment]::GetFolderPath('MyDocuments') + "\$Global:GameName"
     [IO.FileInfo]$Global:GameLogPath            = "$Global:GameRootDirectory\game.log.txt"
     [IO.FileInfo]$Global:GameConfigPath         = "$Global:GameRootDirectory\config.cfg"
     [IO.DirectoryInfo]$Global:GameModDirectory  = "$Global:GameRootDirectory\mod"
@@ -4331,6 +4741,7 @@ Function Sync-Ets2ModRepo {
     [IO.DirectoryInfo]$Global:GameInstallDirectory, [IO.DirectoryInfo]$Global:WorkshopDirectory = Get-GameDirectory -Both
     Write-Ansi "$($T__Tab * 6)Game install folder: <green>$Global:GameInstallDirectory <R>"
     Write-Ansi "$($T__Tab * 6)Workshop folder:     <green>$Global:WorkshopDirectory <R>"
+
     [Void]$Global:GameInstallDirectory # TODO: Remove this voided reference when $Global:GameInstallDirectory is referenced properly elsewhere
 
     [IO.DirectoryInfo]$Global:GameCloudRootDirectory = Get-SteamRemoteDirectory
@@ -4447,6 +4858,10 @@ Function Sync-Ets2ModRepo {
     [IO.FileInfo]$Global:TempProfileUnit = "$Env:Temp\profile.sii"
     [Bool]$Global:DeleteDisabled         = $Global:DdSel -ne 0
     [String[]]$Global:AllLoadOrders      = Get-LoadOrderList
+    [Hashtable]$Global:GameConfigData    = Get-GameConfig
+    [Version]$Global:GameVersion         = $Global:GameConfigData.g_game_version
+
+    # TODO: Add automatic selection of version-specific load orders
     
     If ([IO.Path]::GetExtension($Global:LoadOrder) -ne '.order' -And $Global:LoadOrder -NotIn $Global:AllLoadOrders -And !$Global:OfflineMode) {
         Write-Log WARN "The active load order '$Global:LoadOrder' is not present in the repository. Applying fallback load order."
@@ -4459,39 +4874,24 @@ Function Sync-Ets2ModRepo {
     Write-Host -ForegroundColor Green "OK - $($T__StepTimer.ElapsedMilliseconds)ms"
     $T__StepTimer.Restart()
 
-    Write-Host -NoNewline "$($T__Tab * 5)TS SE Tool Information...  "
-    [Hashtable]$Global:TsseTool = @{
-        RootDirectory = [IO.DirectoryInfo]"$Global:GameRootDirectory\TS SE Tool"
-        Archive       = [IO.FileInfo]$Global:RepositoryInfo.Tsse
-        Executable    = [IO.FileInfo]"$Global:GameRootDirectory\TS SE Tool\TS SE Tool.exe"
-        Name          = 'TS SE Tool'
-    }
-    Switch (Assert-TsseNamingScheme) {
-        Default {
-            $Global:TsseTool['RootDirectory'] = [IO.DirectoryInfo]"$Global:GameRootDirectory\$_"
-            $Global:TsseTool['Executable']    = [IO.FileInfo]"$Global:GameRootDirectory\$_\TS SE Tool.exe"
-            $Global:TsseTool['Installed']     = $Global:TsseTool.Executable.Exists
-        }
-    }
-    Write-Host -ForegroundColor Green "OK - $($T__StepTimer.ElapsedMilliseconds)ms"
-    $T__StepTimer.Restart()
-
     Write-Host -NoNewline "$($T__Tab * 5)Script Information...      "
     [Hashtable]$Global:ScriptDetails = @{
         Author      = 'RainBawZ'
         Copyright   = [Char]0x00A9 + [DateTime]::Now.ToString('yyyy')
         Title       = ($Null, '[Experimental] ')[$Global:IsExperimental] + "TruckSim External Mod Manager"
         ShortTitle  = 'TSExtModMan'
-        Version     = "Version $Global:ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $Global:Revision)")[$Global:IsExperimental]
-        VersionDate = '2026.02.25'
+        Version     = "$Global:ScriptVersion" + ($Null, " (EXPERIMENTAL - Rev. $Global:Revision)")[$Global:IsExperimental]
+        VersionDate = '2026.08.11'
         GitHub      = 'https://github.com/RainBawZ/ETS2ExternalModManager/'
         Contact     = 'Discord - @realtam'
     }
     $Global:ScriptDetails['GitHubFile']  = $Global:ScriptDetails.GitHub + 'blob/main/Client/' + ($Null, 'Experimental/')[$Global:IsExperimental] + "$($Global:ScriptDetails.ShortTitle).ps1"
+    [String[]]$Global:RevisionNotes = @(
+        '- Fixed crash during reloading after changing the active profile.',
+        '- Increased minimum window width.',
+        '- Removed ''Get-GameUnitDecoder'' function and references.'
+    )
     [String[]]$Global:UpdateNotes = @(
-        '',
-        "$Global:ScriptVersion $(($Null, ' (EXPERIMENTAL)')[$Global:IsExperimental])",
-        '',
         '- Added experimental support for American Truck Simulator (ATS).',
         '- Added secondary menu for additional options accessible by pressing Page Up [PG UP].',
         '  * Added menu option for toggling deletion of expired logs or setting log retention time.',
@@ -4499,18 +4899,19 @@ Function Sync-Ets2ModRepo {
         '  * Added menu option for changing the mod repository URL.',
         '  * Added menu option for switching target sim.',
         '  * Added menu option for adjusting the sample/refresh rate for download speed calculations.',
+        '  * Added menu option for toggling mod validation while updating.',
+        '- Added new profile decryption implementation.',
         '- Added internal support for experimental versions.',
-        '- Added live countdown timer for keypress prompts.',
+        '- Added timeouts for keypress prompts.',
         '- Added disk space check before downloads.',
         '- Added Repository URL selection GUI.',
         '- Added support for Steam Cloud-enabled profiles.',
+        '- [TODO] Added support for version dependent load order selection.',
         '- [TODO] Added Steam launch options auto-setup.',
         '- [TODO] Added game configuration (config.cfg) auto-setup.',
         '',
         '- Fixed crash upon selecting "Import load order" from the main menu.',
-        '- Fixed crash on startup for users without TS SE Tool installed.',
         '- Fixed potential crashes caused by trying to generate negative padding strings.',
-        '- Fixed "Launch TS SE Tool" menu option not disabling if TS SE Tool is not installed.',
         '- Fixed uncommanded menu and prompt interactions when input was provided without an active prompt.',
         '- Fixed first-time profile selection menu starting before the script had finished loading.',
         '- Fixed repository downloader not supporting HTTPS in -UseIwr mode.',
@@ -4518,17 +4919,16 @@ Function Sync-Ets2ModRepo {
         '- Fixed text file reader not handling non-UTF8 files correctly.',
         '- Fixed text file writer in some cases writing additional null-bytes to the end of files.',
         '',
-        '- Improved overall script performance.',
+        '- Removed TS SE Tool functionality. TS SE Tool is no longer being maintained.',
+        '',
+        '- Improved overall performance.',
         '- Improved file I/O performance.',
         '- Improved keypress prompt interactivity.',
         '- Improved loading screen layout and information.',
         '- Improved log timestamp accuracy.',
         '- Improved log formatting and readability.',
         '- Improved type definition and assembly importing.',
-        '- Improved Profile selection menu.',
-        '',
-        '- Changed script name to "TruckSim External Mod Manager" (TSExtModMan) to reflect addition of ATS support.',
-        '- Changed log entry chronology. (Reversed from bottom-to-top).'
+        '- Improved Profile selection menu.'
     )
     [String[]]$Global:KnownIssues = @(
         '- Script restarts instead of exiting after completion if the active profile was changed earlier in the session.',
@@ -4569,44 +4969,44 @@ Function Sync-Ets2ModRepo {
         Write-Host ($Global:UiLine * [Console]::BufferWidth)
         Write-Host -NoNewline (' ' + "$Global:ScriptVersion".PadRight($Padding))
 
-        Write-Log INFO 'SelfUpdater : Checking repository for repo-script updates.'
+        Write-Log INFO 'SelfUpdater | Checking repository for repo-script updates.'
 
         Try {
             If ($Global:IsExperimental) {Throw 'Aborted. Current version is experimental.'}
-            Write-Log INFO 'SelfUpdater : Fetching online repo-script content from repository as ByteStream.'
+            Write-Log INFO 'SelfUpdater | Fetching online repo-script content from repository as ByteStream.'
             [Byte[]]$UpdateBytes = (Get-ModRepoFile $Global:RepositoryInfo.Script -UseIwr).Content
-            Write-Log INFO 'SelfUpdater : Converting repo-script ByteStream content to UTF-8 line array.'
+            Write-Log INFO 'SelfUpdater | Converting repo-script ByteStream content to UTF-8 line array.'
             [String[]]$UpdateContent = Get-FileContent -FromBytes $UpdateBytes
 
-            Write-Log INFO 'SelfUpdater : Transferring embedded preference data to repo-script data indices.'
+            Write-Log INFO 'SelfUpdater | Transferring embedded preference data to repo-script data indices.'
             ForEach ($Key in $Global:DataIndices.Keys) {
                 [String]$Value         = Get-Variable "$Key" -ValueOnly -Scope Global
                 [UInt32]$Index         = $Global:DataIndices.$Key.Index
                 $UpdateContent[$Index] = New-EmbeddedValue $UpdateContent[$Index] $Value
             }
-            Write-Log INFO 'SelfUpdater : Successfully transferred preference data to repo-script data indices.'
+            Write-Log INFO 'SelfUpdater | Successfully transferred preference data to repo-script data indices.'
 
-            Write-Log INFO 'SelfUpdater : Parsing repo-script version data.'
+            Write-Log INFO 'SelfUpdater | Parsing repo-script version data.'
             [String]$UpdateVersion = Switch (Read-EmbeddedValue 0 $UpdateContent) {Default {('0.0.0.0', $_)[[Bool]($_ -As [Version])]}}
             If ([Version]$UpdateVersion -gt $Global:ScriptVersion) {
 
-                Write-Log INFO "SelfUpdater : repo-script version '$UpdateVersion' - Update available."
+                Write-Log INFO "SelfUpdater | repo-script version '$UpdateVersion' - Update available."
 
                 [ConsoleColor]$VersionColor, [String]$VersionText, [String]$ReturnValue = (([ConsoleColor]::Green, $UpdateVersion, 'Updated'), ([ConsoleColor]::Red, 'Parsing error', 'Repaired'))[$UpdateVersion -eq '0.0']
 
                 Write-Host -NoNewline -ForegroundColor $VersionColor $VersionText.PadRight($Padding)
                 
-                Write-Log INFO 'SelfUpdater : Writing repo-script content to current script file.'
+                Write-Log INFO 'SelfUpdater | Writing repo-script content to current script file.'
                 Set-Utf8Content $Global:ScriptPath $UpdateContent -NoNewline
 
-                Write-Log INFO "SelfUpdater : Restarting to apply version '$UpdateVersion'."
+                Write-Log INFO "SelfUpdater | Restarting to apply version '$UpdateVersion'."
 
                 Unprotect-Variables
 
                 Return $ReturnValue
             }
             Else {
-                Write-Log INFO "SelfUpdater : repo-script version '$UpdateVersion' - Up to date."
+                Write-Log INFO "SelfUpdater | repo-script version '$UpdateVersion' - Up to date."
                 Write-Host -NoNewline $UpdateVersion.PadRight($Padding)
                 Write-Host -ForegroundColor Green 'Up to date'
             }
@@ -4614,7 +5014,7 @@ Function Sync-Ets2ModRepo {
         }
         Catch {
             If ($_.Exception.Message -Like "*is experimental*") {
-                Write-Log INFO "SelfUpdater : $($_.Exception.Message)"
+                Write-Log INFO "SelfUpdater | $($_.Exception.Message)"
                 Write-Host -NoNewline -ForegroundColor Yellow '---'.PadRight($Padding)
                 Switch (' ' * [Console]::CursorLeft) {Default {
                     Write-Host -ForegroundColor Yellow 'Automatic updates disabled for experimental versions.'
@@ -4624,15 +5024,26 @@ Function Sync-Ets2ModRepo {
 
                 Write-Host ($Global:UiLine * [Console]::BufferWidth)
 
-                Write-Log INFO 'SelfUpdater : Displaying experimental version information.'
+                Write-Log INFO 'SelfUpdater | Displaying experimental version information.'
 
-                Write-Host ("`n What's new:`n   " + ($Global:UpdateNotes -Join "`n   ") + "`n")
-                If ($Global:KnownIssues) {Write-Host (" Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
+                Write-Host -NoNewline -ForegroundColor Green "`n $($Global:ScriptDetails['Version'])"
+                Write-Host -NoNewline ' ::: '
+                Write-Host -NoNewline -ForegroundColor Green "What's new:`n"
+                If ($Global:RevisionNotes) {
+                    Write-Host -NoNewline -ForegroundColor Cyan " This revision:`n   "
+                    Write-Host (($Global:RevisionNotes -Join "`n   ") + "`n")
+                }
+                Write-Host -NoNewline -ForegroundColor Cyan " This version:`n   "
+                Write-Host (($Global:UpdateNotes -Join "`n   ") + "`n")
+                If ($Global:KnownIssues) {
+                    Write-Host -NoNewline -ForegroundColor Yellow " Known issues:`n   "
+                    Write-Host (($Global:KnownIssues -Join "`n   ") + "`n")
+                }
                 [Void](Read-KeyPress ' Press any key to continue.' -Clear)
                 Clear-Host
             }
             Else {
-                Write-Log ERROR "SelfUpdater : $($_.Exception.Message)"
+                Write-Log ERROR "SelfUpdater | $($_.Exception.Message)"
                 Write-Host -ForegroundColor Red (Format-AndExportErrorData $_)
                 Write-Host "`n"
                 [Void](Read-KeyPress ' Press any key to continue.' -Clear)
@@ -4642,7 +5053,7 @@ Function Sync-Ets2ModRepo {
     }
     ElseIf ($Updated -ne 'Restart') {
         Write-Host ($Global:UiLine * [Console]::BufferWidth)
-        Write-Log INFO 'SelfUpdater : Update complete. Displaying update information.'
+        Write-Log INFO 'SelfUpdater | Update complete. Displaying update information.'
         Write-Host -ForegroundColor Green $Updated
         Write-Host ("`n What's new:`n   " + ($Global:UpdateNotes -Join "`n   ") + "`n")
         If ($Global:KnownIssues) {Write-Host (" Known issues:`n   " + ($Global:KnownIssues -Join "`n   ") + "`n")}
@@ -4666,7 +5077,7 @@ Function Sync-Ets2ModRepo {
         [UInt16]$Global:ActiveModsCount  = (($Global:LoadOrderText -Split "`n", 2)[0] -Split ':', 2)[-1].Trim()
         [String[]]$Global:ActiveModFiles = $Global:LoadOrderData.GetEnumerator() | ForEach-Object {[IO.Path]::GetFileName($_.Value.SourcePath) | Where-Object {[IO.Path]::GetExtension($_) -eq '.scs'}}
         Update-ProtectedVars
-        Write-Log INFO 'ModUpdateInit : Collected Load Order and active mod data. '
+        Write-Log INFO 'ModUpdateInit | Collected Load Order and active mod data. '
     }
     Catch [ApplicationException] {}
 
@@ -4679,7 +5090,7 @@ Function Sync-Ets2ModRepo {
     Write-Ansi " <Cyan><BBlu>$MenuHeadTxt" -Indent 1
     Write-Host ($Global:UiLine * [Console]::BufferWidth)
 
-    Write-Log INFO 'ModUpdateInit : Preparing mod update routine.'
+    Write-Log INFO 'ModUpdateInit | Preparing mod update routine.'
 
     [PSCustomObject]$Global:OnlineData = [PSCustomObject]::New()
 
@@ -4697,9 +5108,9 @@ Function Sync-Ets2ModRepo {
     [Hashtable]$LocalMods       = @{}
 
     Try {
-        Write-Log INFO "ModUpdateInit : Fetching version data ('$($Global:RepositoryInfo.$Global:GameNameShort.VersionData)') from repository."
+        Write-Log INFO "ModUpdateInit | Fetching version data ('$($Global:RepositoryInfo.$Global:GameNameShort.VersionData)') from repository."
         $Global:OnlineData = (Get-ModRepoFile $Global:RepositoryInfo.$Global:GameNameShort.VersionData -UseIwr).Content | ConvertFrom-Json
-        Write-Log INFO 'ModUpdateInit : Version data fetched successfully.'
+        Write-Log INFO 'ModUpdateInit | Version data fetched successfully.'
     }
     Catch {Wait-WriteAndExit (" Unable to fetch version data from repository. Try again later.`n Reason: " + (Format-AndExportErrorData $_))}
 
@@ -4709,7 +5120,7 @@ Function Sync-Ets2ModRepo {
     [String[]]$Versions = @('Installed')
 
     If ([IO.File]::Exists('versions.txt')) {
-        Write-Log INFO 'ModUpdateInit : Parsing local version data from ''versions.txt'''
+        Write-Log INFO 'ModUpdateInit | Parsing local version data from ''versions.txt'''
         [UInt64]$Line = 0
         
         ForEach ($LocalVersionData in Get-FileContent versions.txt) {
@@ -4732,7 +5143,7 @@ Function Sync-Ets2ModRepo {
             $Names    += $Name
             $Versions += "$Ver"
         }
-        Write-Log INFO "ModUpdateInit : Local version data successfully parsed. Entries: $($LocalMods.Keys.Count)"
+        Write-Log INFO "ModUpdateInit | Local version data successfully parsed. Entries: $($LocalMods.Keys.Count)"
     }
     $TotalMods                = $Global:OnlineData.PSObject.Properties.Value.Count
     $LongestName              = ($Names + $Global:OnlineData.PSObject.Properties.Value.Name | Sort-Object Length)[-1].Length + 3
@@ -4741,12 +5152,12 @@ Function Sync-Ets2ModRepo {
     [String]$Global:UIRowLine = '╟' + ($Global:UILine * 7) + '┼' + ($Global:UILine * ($LongestName + 1)) + '┼' + ($Global:UILine * ($L_LongestVersion + 1)) + '┼' + ($Global:UILine * ($E_LongestVersion + 1)) + '┼' + ($Global:UILine * 50) + '╢'
     [String]$Global:UIRowTop  = $Global:UIRowLine -Replace '┼', '╤' -Replace '╟', '╔' -Replace '╢', '╗' -Replace $Global:UILine, '═'
     [String]$Global:UIRowEnd  = $Global:UIRowLine -Replace '┼', '═' -Replace '╟', '╚' -Replace '╢', '╝' -Replace $Global:UILine, '═'
-    Write-Log INFO 'ModUpdateInit : Prepared text formatting data.'
+    Write-Log INFO 'ModUpdateInit | Prepared text formatting data.'
 
-    Write-Log INFO 'ModUpdateInit : Ready.'
+    Write-Log INFO 'ModUpdateInit | Ready.'
 
     If ($Global:NoUpdate) {
-        Write-Log INFO 'ModUpdateInit : No update requested.'
+        Write-Log INFO 'ModUpdateInit | No update requested.'
 
         Edit-ProfileLoadOrder
 
@@ -4762,7 +5173,7 @@ Function Sync-Ets2ModRepo {
 
     If ($Global:ValidateInstall) {
         Start-Process "steam://validate/$Global:GameAppId" -
-        Write-Log INFO 'ModUpdateInit : Started game file integrity check (Steam).'
+        Write-Log INFO 'ModUpdateInit | Started game file integrity check (Steam).'
         Write-Host ' Started Steam game file validation.'
         Start-Sleep 1
         Set-ForegroundWindow -Self
@@ -4772,7 +5183,7 @@ Function Sync-Ets2ModRepo {
         $PreviousProgress = Get-FileContent progress.tmp
         Remove-Item progress.tmp -Force
 
-        Write-Log INFO 'ModUpdate : Previous session did not complete. Resuming previous session progress.'
+        Write-Log INFO 'ModUpdateInit | Previous session did not complete. Resuming previous session progress.'
     }
 
     #Write-Host "Active profile: $Global:ActiveProfileName, load order: $Global:LoadOrder".PadLeft([Console]::BufferWidth - 1) # + "`n" + $Global:ActiveProfile.PadLeft([Console]::BufferWidth - 1))
@@ -4782,7 +5193,7 @@ Function Sync-Ets2ModRepo {
     Write-Host ('║ ' + 'No.'.PadRight(6) + '│ ' + 'Mod'.PadRight($LongestName) + '│ ' + 'Installed'.PadRight($L_LongestVersion) + '│ ' + 'Current'.PadRight($E_LongestVersion) + '│ ' + 'Status'.PadRight(48) + ' ║')
     Write-Host $Global:UIRowLine
 
-    Write-Log INFO 'ModUpdate | Starting mod update routine.'
+    Write-Log INFO 'ModUpdateInit | Starting mod update routine.'
     ForEach ($CurrentMod in $Global:OnlineData.PSObject.Properties.Value) {
         $ModCounter++
         
@@ -4791,6 +5202,7 @@ Function Sync-Ets2ModRepo {
         [Hashtable]$LocalMod     = $LocalMods.($CurrentMod.Name)
         [ModRepairAction]$Repair = [ModRepairAction]::None # 0: None   1: Entry   2: File
         [String]$ModCountStr     = "$ModCounter".PadLeft(2) + "/$TotalMods"
+        [String]$LogModName      = "Mod[{0}]('{1}')" -f $ModCounter, $CurrentMod.Name
 
         Write-Host -NoNewline ('║ ' + $ModCountStr.PadRight(6) + '│ ' + $CurrentMod.Title.PadRight($LongestName) + '│ ')
 
@@ -4799,15 +5211,15 @@ Function Sync-Ets2ModRepo {
             'Installing' {Write-Host -NoNewline '---'.PadRight($L_LongestVersion); Break}
             'Repairing'  {$Repair = ([ModRepairAction]::File, [ModRepairAction]::Entry)[![Bool]$LocalMod.Version]; Write-Host -NoNewline -ForegroundColor Red ('???', $LocalMod.VersionStr)[[Bool]$LocalMod.Version].PadRight($L_LongestVersion); Break}
             'Updating'   {Write-Host -NoNewline $LocalMod.VersionStr.PadRight($L_LongestVersion); Break}
-            Default      {Write-Log WARN "'$($CurrentMod.Name)' : Unexpected ModUpdateState '$State'."; Write-Host -NoNewline '???'.PadRight($L_LongestVersion); Break}
+            Default      {Write-Log WARN "$LogModName | Unexpected ModUpdateState '$_'."; Write-Host -NoNewline '???'.PadRight($L_LongestVersion); Break}
         }
         Write-Host -NoNewline '│ '
         
         Switch ($Repair) {
-            'None'  {Write-Log INFO "'$($CurrentMod.Name)' : No local problems detected."; Break}
-            'Entry' {Write-Log WARN "'$($CurrentMod.Name)' : Problem detected in local version data: No corresponding version data for existing file. Entry repair required."; Break}
-            'File'  {Write-Log WARN "'$($CurrentMod.Name)' : Problem detected in local mod storage: Version data references missing file. Redownload required."; Break}
-            Default {Write-Log WARN "'$($CurrentMod.Name)' : Unexpected ModRepairAction '$Repair'."; Break}
+            'None'  {Write-Log INFO "$LogModName | No local problems detected."; Break}
+            'Entry' {Write-Log WARN "$LogModName | Problem detected in local version data: No corresponding version data for existing file. Entry repair required."; Break}
+            'File'  {Write-Log WARN "$LogModName | Problem detected in local mod storage: Version data references missing file. Redownload required."; Break}
+            Default {Write-Log WARN "$LogModName | Unexpected ModRepairAction '$Repair'."; Break}
         }
 
         [ConsoleColor]$VersionColor = ([ConsoleColor]::Green, [ConsoleColor]::White)[($LocalMod.Version -ge $CurrentMod.Version)]
@@ -4815,7 +5227,7 @@ Function Sync-Ets2ModRepo {
         Write-Host -NoNewline '│ '
 
         If ($CurrentMod.Name -In $PreviousProgress) {
-            Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Already processed."
+            Write-Log INFO "$LogModName | Skipped - Already processed."
             Write-Host -NoNewline -ForegroundColor Green 'Up to date'.PadRight(48)
             Write-Host ' ║'
 
@@ -4834,8 +5246,8 @@ Function Sync-Ets2ModRepo {
         If ($LocalMod.Version -ge $CurrentMod.Version -Or $Repair -eq 'File') {
 
             If ($CurrentMod.FileName -NotIn $Global:ActiveModFiles -And !$Global:UpdateAll) {
-                If ($Repair -eq 'File')  {Write-Log WARN "'$($CurrentMod.Name)' : Cannot perform repair - The file was skipped (not in load order)."}
-                Else                     {Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Not in load order."}
+                If ($Repair -eq 'File')  {Write-Log WARN "$LogModName | Cannot perform repair - The file was skipped (not in load order)."}
+                Else                     {Write-Log INFO "$LogModName | Skipped - Not in load order."}
                 Write-Host -NoNewline -ForegroundColor DarkGray 'Skipped - Not in load order'.PadRight(48)
                 Write-Host ' ║'
     
@@ -4844,12 +5256,22 @@ Function Sync-Ets2ModRepo {
                 Continue
             }
 
-            Write-Host -NoNewline (("$([ModUpdateState]::Validating)...", "$Status...")[$Repair -ne 'None']).PadRight(48) #[ModUpdateState]::Validating
+
+            Write-Host -NoNewline (("$([ModUpdateState]::Validating)...", "$Status...")[$Repair -ne 'None' -Or !$Global:ValidateMods]).PadRight(48)
             Write-Host -NoNewline ' ║'
 
-            If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {
+            If ($Global:ValidateMods) {
+                Write-Log INFO "$LogModName | Validating mod file."
+                [Bool]$ModIntegrity = Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size
+            }
+            Else {
+                Write-Log INFO "$LogModName | Skipping mod file validation - Mod file validation is disabled."
+                [Bool]$ModIntegrity = $True
+            }
+
+            If (!($ModIntegrity)) {
                 If ($Repair -eq 'None') {
-                    Write-Log WARN "'$($CurrentMod.Name)' : Validation failed. Reinstalling."
+                    Write-Log WARN "$LogModName | Validation failed. Reinstalling."
                     [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                     Write-Host -NoNewline -ForegroundColor Red 'Validation failed.'.PadRight(48)
                     Write-Host -NoNewline ' ║'
@@ -4862,7 +5284,7 @@ Function Sync-Ets2ModRepo {
             }
             Else {
                 [String]$ResultString = ('Up to date', 'Repaired')[$Repair -ne 'None']
-                Write-Log INFO "'$($CurrentMod.Name)': $ResultString"
+                Write-Log INFO "$LogModName | $ResultString"
                 [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                 Write-Host -NoNewline -ForegroundColor Green $ResultString.PadRight(48)
                 Write-Host ' ║'
@@ -4878,11 +5300,21 @@ Function Sync-Ets2ModRepo {
             Try {
                 [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                 Write-Host -NoNewline ('Preparing...'.PadRight(48) + ' ║')
-                If (!(Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size)) {
+
+                If ($Global:ValidateMods) {
+                    Write-Log INFO "$LogModName | Validating mod file."
+                    [Bool]$ModIntegrity = Test-FileHash $CurrentMod.FileName $CurrentMod.Hash $CurrentMod.Size
+                }
+                Else {
+                    Write-Log INFO "$LogModName | Skipping mod file validation - Mod file validation disabled by user."
+                    [Bool]$ModIntegrity = $True
+                }
+
+                If (!$ModIntegrity) {
 
                     If ($CurrentMod.FileName -NotIn $Global:ActiveModFiles -And !$Global:UpdateAll) {
-                        If ($Repair -eq 'File')  {Write-Log WARN "'$($CurrentMod.Name)' : Cannot perform repair - The file was skipped (not in load order)."}
-                        Else                     {Write-Log INFO "'$($CurrentMod.Name)' : Skipped - Not in load order."}
+                        If ($Repair -eq 'File')  {Write-Log WARN "$LogModName | Cannot perform repair - The file was skipped (not in load order)."}
+                        Else                     {Write-Log INFO "$LogModName | Skipped - Not in load order."}
                         [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                         Write-Host -NoNewline -ForegroundColor DarkGray 'Skipped - Not in load order'.PadRight(48)
                         Write-Host ' ║'
@@ -4892,18 +5324,22 @@ Function Sync-Ets2ModRepo {
                         Continue
                     }
 
-                    If (-Not (Test-FreeDiskSpace $CurrentMod.Size 0 2)) {
-                        Write-Log ERROR "'$($CurrentMod.Name)' : Insufficient disk space to perform update. Required: $([Math]::Round($CurrentMod.Size / 1MB, 2)) MB."
-                        Write-Host -NoNewline -ForegroundColor Red 'Failed - Insufficient disk space.'.PadRight(48)
+                    If (!(Test-FreeDiskSpace $CurrentMod.Size)) {
+                        Write-Log ERROR "$LogModName | Insufficient disk space to perform update. Requires $([Math]::Round($CurrentMod.Size / 1MB, 2)) MB."
+                        Write-Host -NoNewline -ForegroundColor Red 'Failed - Insufficient disk space'.PadRight(48)
                         Write-Host ' ║'
 
                         $Failures++
                         Continue
                     }
+                    Else {Write-Log INFO "$LogModName | Disk space is sufficient. Continuing."}
 
-                    If (Test-ModActive $CurrentMod.Name) {Throw [IO.IOException]::New("Close $Global:GameName to update this mod.")}
+                    If (Test-ModActive $CurrentMod.Name) {
+                        Write-Log ERROR "$LogModName | Cannot update while the game is running. The mod file is in use by the $Global:GameNameShort process."
+                        Throw [IO.IOException]::New("Close $Global:GameName to update this mod.")
+                    }
 
-                    Write-Log INFO "'$($CurrentMod.Name)': Downloading."
+                    Write-Log INFO "$LogModName | Downloading."
 
                     If ([IO.File]::Exists($CurrentMod.FileName)) {
                         [UInt64]$OriginalSize = Get-ItemPropertyValue $CurrentMod.FileName Length
@@ -4927,13 +5363,13 @@ Function Sync-Ets2ModRepo {
                     Write-Host ' ║'
                 }
                 Else {
-                    If ($Repair -eq 'Entry') {Write-Log INFO "'$($CurrentMod.Name)': Entry repair successful."}
+                    If ($Repair -eq 'Entry') {Write-Log INFO "$LogModName | Entry repair successful."}
                     [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
                     Write-Host -NoNewline -ForegroundColor Green 'Repaired       '.PadRight(48)
                     Write-Host ' ║'
                 }
 
-                Write-Log INFO "'$($CurrentMod.Name)': Processed successfully. $Result"
+                Write-Log INFO "$LogModName | Processed successfully. $Result"
                 
                 Set-Utf8Content progress.tmp "$($CurrentMod.Name)" -Append
 
@@ -4942,8 +5378,8 @@ Function Sync-Ets2ModRepo {
                 $Successes++
             }
             Catch {
-                If ($_.Exception -Is [IO.IOException]) {Write-Log WARN "'$($CurrentMod.Name)': Skipped - File in use by $Global:GameName process."}
-                Else                                   {Write-Log ERROR "'$($CurrentMod.Name)': Failed - $($_.Exception.Message)"}
+                If ($_.Exception -Is [IO.IOException]) {Write-Log WARN "$LogModName | Skipped - File in use by $Global:GameName process."}
+                Else                                   {Write-Log ERROR "$LogModName | Failed - $($_.Exception.Message)"}
 
                 Write-HostX $xPos -Color Red "Failed. See $($Global:SessionLog.Name)".PadRight(48)
                 Write-Host ' ║'
@@ -4955,49 +5391,6 @@ Function Sync-Ets2ModRepo {
                 $NewVersions += ($CurrentMod.Name, $LocalMod.VersionStr) -Join '='
                 $Failures++
             }
-        }
-    }
-    If (!$Global:TsseTool.RootDirectory.Exists) {
-        Write-Log INFO "'$($Global:TsseTool.Name)': $($Global:TsseTool.Name) not detected in '$($Global:TsseTool.RootDirectory)'. Installing."
-        Write-Host -NoNewline (' ' + $Global:TsseTool.Name.PadRight($LongestName) + '---'.PadRight($L_LongestVersion))
-        Write-Host -NoNewline -ForegroundColor Green '---'.PadRight($E_LongestVersion)
-
-        [UInt16]$xPos = [Console]::CursorLeft
-
-        Write-Host -NoNewline -ForegroundColor Green 'Installing...'
-        
-        [Console]::SetCursorPosition($xPos, [Console]::CursorTop)
-        Try {
-            If (-Not (Test-FreeDiskSpace 50MB 0 2)) {Throw 'Insufficient disk space.'}
-
-            Write-Log INFO "'$($Global:TsseTool.Name)': Downloading $($Global:TsseTool.Name) archive '$($Global:TsseTool.Archive.Name)'."
-
-            [Void](Get-ModRepoFile $Global:TsseTool.Archive.Name -UseIwr -Save)
-
-            Write-Log INFO "'$($Global:TsseTool.Name)': Downloaded archive to '$($Global:TsseTool.Archive)'."
-
-            $Global:TsseTool.RootDirectory.Create()
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($Global:TsseTool.Archive, $Global:TsseTool.RootDirectory)
-
-            Write-Log INFO "'$($Global:TsseTool.Name)': Extracted archive '$($Global:TsseTool.Archive.Name)' to directory '$($Global:TsseTool.RootDirectory)'."
-
-            If ($Global:TsseTool.Archive.Exists) {$Global:TsseTool.Archive.Delete()}
-
-            $Global:TsseTool['Installed'] = $True
-
-            Write-Log INFO "'$($Global:TsseTool.Name)': Installed successfully."
-            Write-Host -ForegroundColor Green 'Installed          '
-        }
-        Catch {
-            Write-Log ERROR "'$($Global:TsseTool.Name)': Failed - $($_.Exception.Message)"
-            Try {
-                If ($Global:TsseTool.Archive.Exists)       {$Global:TsseTool.Archive.Delete()}
-                If ($Global:TsseTool.RootDirectory.Exists) {$Global:TsseTool.RootDirectory.Delete()}
-            }
-            Catch {[Void](Format-AndExportErrorData $_)}
-            $Failures++
-
-            Write-Host -ForegroundColor Red 'Failed              '
         }
     }
 
@@ -5047,15 +5440,11 @@ Function Sync-Ets2ModRepo {
     Write-Host $Global:UiRowEnd
     Write-Log INFO 'Session completed. Waiting for user input before continuing to OnExit tasks.'
 
-    [Void](Read-KeyPress " Press any key to$(('', " launch $Global:GameNameShort $(('', "+ $($Global:TsseTool.Name) ")[$Global:StartSaveEditor])and")[$Global:StartGame]) exit")
+    [Void](Read-KeyPress " Press any key to$(('', " launch $Global:GameNameShort and")[$Global:StartGame]) exit")
     If ($Successes + $Failures -eq 0 -And $Global:StartGame) {
         If ($Global:GameProcess -NotIn (Get-Process).Name) {
             Start-Process "steam://launch/$Global:GameAppId"
             Write-Log INFO "Started $Global:GameName."
-        }
-        If ($Global:StartSaveEditor -And $Global:TsseTool.Executable.Exists -And $Global:TsseTool.Name -NotIn (Get-Process).Name) {
-            Start-Process $Global:TsseTool.Executable -WorkingDirectory $Global:TsseTool.RootDirectory
-            Write-Log INFO "Started $($Global:TsseTool.Name)."
         }
     }
     Write-Log INFO 'Exiting session.'
